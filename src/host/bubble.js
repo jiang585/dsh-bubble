@@ -134,6 +134,8 @@ export class BubbleConversation {
   #stream = undefined
   #usage = { turn: emptyUsage(), session: emptyUsage() }
   #titles = new Map()
+  /** Pending `ask_user_question` call the agent is waiting on, when there is one. */
+  #question = null
 
   /**
    * @param options - Host context, normalized config, state store, and a warning sink.
@@ -172,6 +174,43 @@ export class BubbleConversation {
   /** Publish one event to the ball. */
   #publish(payload) {
     this.#hub?.broadcast(payload)
+  }
+
+  /**
+   * Record or clear the agent's pending question.
+   *
+   * @param callId - Tool call the question belongs to, or undefined to clear it.
+   * @param rawArguments - The tool call's JSON argument string.
+   */
+  #setQuestion(callId, rawArguments) {
+    if (callId === undefined) {
+      if (this.#question === null) return
+      this.#question = null
+      this.#publish({ type: 'question', question: null })
+      return
+    }
+    let questions = []
+    try {
+      const parsed = JSON.parse(String(rawArguments ?? '{}'))
+      if (Array.isArray(parsed?.questions)) {
+        questions = parsed.questions.map((item) => ({
+          id: String(item?.id ?? ''),
+          question: String(item?.question ?? ''),
+          ...(typeof item?.header === 'string' ? { header: item.header } : {}),
+          ...(item?.multiSelect === true ? { multiSelect: true } : {}),
+          options: Array.isArray(item?.options)
+            ? item.options.map((option) => ({
+                label: String(option?.label ?? ''),
+                ...(typeof option?.description === 'string' ? { description: option.description } : {}),
+              }))
+            : [],
+        }))
+      }
+    } catch (error) {
+      this.#logger.warn('dsh-bubble: cannot parse an ask_user_question call', error)
+    }
+    this.#question = { callId: String(callId), questions }
+    this.#publish({ type: 'question', question: this.#question })
   }
 
   /** Zero both usage tallies, for a new or switched conversation. */
@@ -398,6 +437,7 @@ export class BubbleConversation {
       theme: this.#store.prefs().theme,
       model: this.#store.model(),
       usage: { turn: { ...this.#usage.turn }, session: { ...this.#usage.session } },
+      question: this.#question,
       messages: session === undefined ? [] : transcriptRows(session.deriveMessages()),
       history: [],
     }
@@ -430,8 +470,7 @@ export class BubbleConversation {
    * @param session - Session that emitted the event.
    * @param event - Durable event envelope.
    */
-  onSessionEvent(session, event) {
-    if (event?.type === 'session/title' && typeof event.data?.title === 'string') {
+  onSessionEvent(session, event) {    if (event?.type === 'session/title' && typeof event.data?.title === 'string') {
       this.#titles.set(String(session.id), event.data.title)
     }
     if (this.#sessionId === undefined || String(session.id) !== String(this.#sessionId)) return
@@ -441,7 +480,20 @@ export class BubbleConversation {
       this.#setRunning(true)
       this.#publish({ type: 'usage', usage: { turn: { ...this.#usage.turn }, session: { ...this.#usage.session } } })
     }
-    if (event?.type === 'turn/end') this.#setRunning(false)
+    // A pending `ask_user_question` call is the only host-side signal that the agent is blocked on
+    // the user. The answering surface itself belongs to the DSH window (the `userQuestions` service
+    // allows a single provider and the window owns it), so the ball reports the question and points
+    // the user at the window instead of pretending to answer it.
+    if (event?.type === 'tool/call' && event.data?.name === 'ask_user_question') {
+      this.#setQuestion(event.data.callId, event.data.arguments)
+    }
+    if (event?.type === 'tool/result' && this.#question !== null && String(event.data?.callId) === this.#question.callId) {
+      this.#setQuestion(undefined, undefined)
+    }
+    if (event?.type === 'turn/end') {
+      this.#setRunning(false)
+      if (this.#question !== null) this.#setQuestion(undefined, undefined)
+    }
     if (event?.type === 'assistant/message' && event.data?.usage !== undefined) {
       addUsage(this.#usage.turn, event.data.usage)
       addUsage(this.#usage.session, event.data.usage)

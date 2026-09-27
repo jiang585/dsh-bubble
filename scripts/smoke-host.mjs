@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Smoke-test the plugin against a fake harness: mount it, drive its HTTP surface, and assert the
  * harness calls it makes. This runs before anything touches a live profile.
  *
@@ -60,8 +60,8 @@ function fakeContext({ sessionId = 'sess-1' } = {}) {
         if (index >= 0) list.splice(index, 1)
       }
     },
-    emit: (name, payload) => {
-      for (const handler of handlers.get(name) ?? []) handler(payload)
+    emit: (name, ...args) => {
+      for (const handler of handlers.get(name) ?? []) handler(...args)
     },
     get: (service) => {
       if (service === 'workspaceRegistry') return ctx.workspaceRegistry
@@ -337,6 +337,69 @@ try {
   assert.ok(!frames.some((event) => event.text.includes('不应出现')), 'a stale revision must be dropped')
 
   ctx.emit('agent/assistant-stream', { agent, frame: { type: 'end', revision: 7, index: 1, outcome: { kind: 'committed', eventType: 'assistant/message', seq: 1 } } })
+
+  // A pending `ask_user_question` must be surfaced to the page: it is the only host-side signal that
+  // the agent is blocked on the user, and the ball cannot answer it itself.
+  const questionFrames = () => stream
+    .text()
+    .split('\n')
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => JSON.parse(line.slice(5)))
+    .filter((frame) => frame.type === 'question')
+
+  /** Emit one durable session event the way the host does. */
+  const session = ctx.sessions.get('sess-2')
+  const emitSession = (data) => ctx.emit('session/event', session, { id: data.seq ?? 1, type: data.type, data: data.data })
+
+  emitSession({
+    type: 'tool/call',
+    data: {
+      turn: 1,
+      step: 1,
+      callId: 'call-1',
+      name: 'ask_user_question',
+      arguments: JSON.stringify({
+        questions: [
+          {
+            id: 'deploy',
+            header: '确认',
+            question: '要部署到生产环境吗？',
+            options: [{ label: '是' }, { label: '否', description: '再等等' }],
+          },
+        ],
+      }),
+    },
+  })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  const asked = questionFrames().at(-1)
+  assert.ok(asked !== undefined, 'a pending question must be published')
+  assert.equal(asked.question.callId, 'call-1')
+  assert.equal(asked.question.questions.length, 1)
+  assert.equal(asked.question.questions[0].question, '要部署到生产环境吗？')
+  assert.equal(asked.question.questions[0].header, '确认')
+  assert.deepEqual(asked.question.questions[0].options, [
+    { label: '是' },
+    { label: '否', description: '再等等' },
+  ])
+  const withQuestion = await callRoute(ctx, '/dsh-bubble/state')
+  assert.equal(withQuestion.json.question.callId, 'call-1', 'a reopened panel must see the question')
+
+  // A malformed argument string must not take the plugin down.
+  emitSession({
+    type: 'tool/call',
+    data: { turn: 1, step: 1, callId: 'call-2', name: 'ask_user_question', arguments: '{not json' },
+  })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  const broken = questionFrames().at(-1)
+  assert.equal(broken.question.callId, 'call-2')
+  assert.deepEqual(broken.question.questions, [], 'an unparsable call yields an empty question list')
+
+  // The result retires it, so a reopened panel does not show a stale question.
+  emitSession({ type: 'tool/result', data: { callId: 'call-2', outcome: 'ok' } })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(questionFrames().at(-1).question, null)
+  const reopened = await callRoute(ctx, '/dsh-bubble/state')
+  assert.equal(reopened.json.question, null, 'the snapshot must not carry a resolved question')
 
   // Dispose every mounted effect so the heartbeat timer cannot keep this process alive.
   for (const dispose of ctx.effects.reverse()) {

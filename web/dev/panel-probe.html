@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="UTF-8">
+    <title>Bubble panel probe</title>
+  </head>
+  <body>
+    <!--
+      Regression probe for three panel behaviours:
+
+      1. a newly arrived message always scrolls the transcript to the tail;
+      2. a prompt sent while the agent is busy is echoed immediately and retired once the durable
+         transcript carries it;
+      3. a pending `ask_user_question` is surfaced with its options and a jump to the DSH window.
+
+      The real panel page is mounted in a same-origin iframe with a shim that fakes the Tauri bridge
+      and the SSE stream, so the probe drives production code without a running DSH. `scripts/
+      check-panel.mjs` runs this through headless Chromium and reads data-result from the dumped DOM.
+    -->
+    <div id="out" data-result="pending">running…</div>
+    <iframe id="frame" width="360" height="560" style="border:1px solid #ccc"></iframe>
+    <script>
+      const out = document.getElementById('out')
+      const log = []
+      const say = (line) => { log.push(line); out.textContent = log.join('\n') }
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+      /** Build the shim installed before the panel's own scripts run. */
+      function shim() {
+        return `<base href="../"><script>
+          window.__probe = { calls: [], pushes: [], sends: [], listeners: {} };
+          // Desktop bridge: enough for the panel to believe it runs inside the shell.
+          window.__TAURI__ = {
+            core: { invoke: async (command, args) => {
+              window.__probe.calls.push(command);
+              if (command === 'bubble_environment') {
+                return { api_base: 'http://probe.invalid/dsh-bubble', token: 'probe', locale: 'zh', ball_size: 72 };
+              }
+              return null;
+            } },
+            event: { listen: async () => () => {} },
+          };
+          // Network: canned snapshot plus a controllable event stream.
+          window.fetch = async (url, options) => {
+            const target = String(url);
+            if (target.includes('/message')) {
+              window.__probe.sends.push(JSON.parse(options?.body ?? '{}').text);
+            }
+            const body = target.includes('/state') ? JSON.stringify({ messages: [] }) : '{}';
+            return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } });
+          };
+          window.EventSource = class {
+            constructor() { window.__probe.source = this; this.readyState = 1; }
+            addEventListener(type, handler) { window.__probe.listeners[type] = handler; }
+            close() {}
+          };
+          window.__probe.push = (payload) => {
+            const handler = window.__probe.listeners.bubble ?? window.__probe.listeners.message;
+            window.__probe.pushes.push(payload.type);
+            handler?.({ data: JSON.stringify(payload) });
+          };
+          Element.prototype.setPointerCapture = function () {};
+          Element.prototype.releasePointerCapture = function () {};
+        <\/script>`
+      }
+
+      /** Write the panel page into the iframe with the shim already installed. */
+      async function mountPanel(frame) {
+        const html = await (await fetch('../index.html')).text()
+        const doc = frame.contentDocument
+        doc.open()
+        doc.write(html.replace('<head>', `<head>${shim()}`))
+        doc.close()
+        return doc
+      }
+
+      /** Fire a synthetic pointer event on a target inside the panel document. */
+      function pointer(win, target, type, x, y) {
+        target.dispatchEvent(new win.PointerEvent(type, {
+          bubbles: true, cancelable: true, composed: true,
+          button: 0, buttons: type === 'pointerdown' ? 1 : 0, pointerId: 1,
+          clientX: x, clientY: y, screenX: x, screenY: y,
+        }))
+      }
+
+      /** One text message in the shape the host publishes. */
+      const message = (id, role, text) => ({ id, role, text })
+
+      async function main() {
+        const frame = document.getElementById('frame')
+        const doc = await mountPanel(frame)
+        await sleep(700)
+        const win = frame.contentWindow
+        const probe = win.__probe
+        const transcript = doc.getElementById('transcript')
+        const bubble = doc.getElementById('ball')
+        const prompt = doc.getElementById('prompt')
+        const jumpLatest = doc.getElementById('jump-latest')
+        const questionCard = doc.getElementById('question-card')
+        const failures = []
+
+        /** Record one assertion. */
+        const check = (name, ok, detail) => {
+          say(`${ok ? 'ok  ' : 'FAIL'} ${name}${detail === undefined ? '' : ` (${detail})`}`)
+          if (!ok) failures.push(name)
+        }
+
+        check('panel mounted', typeof probe?.push === 'function', `calls=${probe?.calls?.join(',') ?? 'none'}`)
+
+        // Expand the panel through the real ball click handler.
+        pointer(win, bubble, 'pointerdown', 40, 40)
+        pointer(win, bubble, 'pointerup', 40, 40)
+        await sleep(400)
+        check('expanded', doc.body.classList.contains('expanded'))
+
+        // A transcript long enough to scroll.
+        const long = '这一段用来把对话视窗撑出滚动条，重复若干次以便产生足够的可滚动高度。'
+        const seeded = []
+        for (let index = 0; index < 14; index += 1) {
+          seeded.push(message(`m${index}`, index % 2 === 0 ? 'user' : 'assistant', `${long}${index}`))
+        }
+        probe.push({ type: 'replace', messages: seeded })
+        await sleep(300)
+        const scrollable = transcript.scrollHeight > transcript.clientHeight + 40
+        check('transcript scrollable', scrollable, `h=${transcript.scrollHeight} v=${transcript.clientHeight}`)
+
+        // --- 1. Reading history must not be yanked away by streaming deltas ...
+        transcript.scrollTop = 0
+        await sleep(120)
+        probe.push({ type: 'delta', id: 'bubble-stream', kind: 'text', text: '流式内容' })
+        await sleep(300)
+        const stayedUp = transcript.scrollTop < 40
+        check('scrolled-away reader is not yanked by a delta', stayedUp, `top=${Math.round(transcript.scrollTop)}`)
+        check('“有新消息”提示出现', jumpLatest.hidden === false,
+          `hidden=${jumpLatest.hidden} streamRow=${transcript.querySelector('[data-id="bubble-stream"]') !== null} `
+          + `rows=${transcript.querySelectorAll('.row').length} top=${Math.round(transcript.scrollTop)}`)
+
+        // --- ... but a new message always jumps to the tail.
+        probe.push({ type: 'replace', messages: [...seeded, message('m14', 'assistant', '这是刚收到的新消息。')] })
+        await sleep(400)
+        const atBottom = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight <= 4
+        check('new message jumps to the tail', atBottom,
+          `gap=${Math.round(transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight)}`)
+        check('提示随后隐藏', jumpLatest.hidden === true)
+
+        // --- 2. A prompt sent while the agent is busy is echoed immediately.
+        prompt.textContent = '第二条消息：这条必须立刻可见'
+        prompt.dispatchEvent(new win.Event('input', { bubbles: true }))
+        doc.getElementById('composer').dispatchEvent(new win.Event('submit', { bubbles: true, cancelable: true }))
+        await sleep(400)
+        const pendingRows = () => [...transcript.querySelectorAll('.row-pending')]
+        check('排队消息立刻可见', pendingRows().length === 1, `rows=${pendingRows().length}`)
+        check('排队提示文案', pendingRows()[0]?.textContent.includes('等待 Agent 处理') === true)
+        check('请求已发出', probe.sends.includes('第二条消息：这条必须立刻可见'), `sends=${JSON.stringify(probe.sends)}`)
+
+        // Once the durable transcript carries it, the echo retires.
+        probe.push({
+          type: 'replace',
+          messages: [...seeded, message('m15', 'user', '第二条消息：这条必须立刻可见')],
+        })
+        await sleep(300)
+        check('落地后撤销回显', pendingRows().length === 0, `rows=${pendingRows().length}`)
+        check('真实消息已渲染', transcript.textContent.includes('第二条消息：这条必须立刻可见'))
+
+        // --- 3. A pending question is surfaced with its options and a jump button.
+        probe.push({
+          type: 'question',
+          question: {
+            callId: 'call-1',
+            questions: [{
+              id: 'deploy',
+              header: '确认',
+              question: '要部署到生产环境吗？',
+              options: [{ label: '是' }, { label: '否' }],
+            }],
+          },
+        })
+        await sleep(300)
+        check('提问卡片出现', questionCard.hidden === false)
+        check('问题正文渲染', questionCard.textContent.includes('要部署到生产环境吗？'))
+        check('选项渲染', questionCard.querySelectorAll('.question-options li').length === 2)
+        const before = probe.calls.length
+        doc.getElementById('question-jump').click()
+        await sleep(300)
+        check('跳转按钮调用 bubble_focus_main',
+          probe.calls.slice(before).includes('bubble_focus_main'), `calls=${probe.calls.join(',')}`)
+
+        // A resolved question clears the card.
+        probe.push({ type: 'question', question: null })
+        await sleep(200)
+        check('提问解决后卡片隐藏', questionCard.hidden === true)
+
+        say(`pushes=${probe.pushes.join(',')}`)
+        out.dataset.result = failures.length === 0 ? 'pass' : 'fail'
+        say(`result = ${out.dataset.result}`)
+      }
+
+      main().catch((error) => {
+        out.dataset.result = 'fail'
+        say(`FAIL: ${String(error && error.message ? error.message : error)}`)
+      })
+    </script>
+  </body>
+</html>

@@ -58,6 +58,16 @@
 
       <!-- 对话主视窗 -->
       <div id="transcript" role="log" aria-live="polite"></div>
+      <button id="jump-latest" type="button" hidden>↓ 有新消息</button>
+
+      <!-- Agent 提问卡片：答题权属于 DSH 主窗口，这里负责告知与一跳 -->
+      <div id="question-card" hidden>
+        <div class="question-head">
+          <span class="question-badge">Agent 在等你回答</span>
+        </div>
+        <div id="question-list"></div>
+        <button id="question-jump" type="button">去 DSH 主窗口回答</button>
+      </div>
 
       <!-- 优雅的浮层抽屉：模型选择器 -->
       <div id="model-drawer" class="panel-drawer" hidden>

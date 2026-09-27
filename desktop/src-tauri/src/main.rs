@@ -1,4 +1,4 @@
-﻿//! DSH Bubble floating-ball window shell.
+//! DSH Bubble floating-ball window shell.
 //!
 //! The plugin's host half spawns this executable and passes the ball's persisted geometry plus the
 //! plugin HTTP endpoint through the environment. This shell owns the native window: it draws no
@@ -441,6 +441,98 @@ fn bubble_open_url(url: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Id of the process that started this shell, which is the DSH host.
+fn parent_process_id() -> Option<u32> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).ok()?;
+        let mut entry = PROCESSENTRY32W::default();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let own = std::process::id();
+        let mut parent = None;
+        if Process32FirstW(snapshot, &mut entry).is_ok() {
+            loop {
+                if entry.th32ProcessID == own {
+                    parent = Some(entry.th32ParentProcessID);
+                    break;
+                }
+                if Process32NextW(snapshot, &mut entry).is_err() {
+                    break;
+                }
+            }
+        }
+        let _ = CloseHandle(snapshot);
+        parent
+    }
+}
+
+/**
+ * Bring the DSH window that launched this shell to the foreground.
+ *
+ * The ball is a child of the DSH host, and the host owns the only surface that can answer an
+ * `ask_user_question` prompt (the `userQuestions` service allows one provider). When the agent is
+ * blocked on the user, this is the button that puts them in front of the window that can answer.
+ */
+#[tauri::command]
+fn bubble_focus_main() -> Result<(), String> {
+    use windows::core::BOOL;
+    use windows::Win32::Foundation::{HWND, LPARAM, RECT};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow,
+        ShowWindow, SW_RESTORE,
+    };
+
+    /// Carries the search state through `EnumWindows`.
+    struct Search {
+        /// Process whose window is wanted.
+        pid: u32,
+        /// Best handle found so far, as a raw pointer value.
+        best: isize,
+        /// Area of the best handle, for picking the main window over tooltips.
+        area: i64,
+    }
+
+    unsafe extern "system" fn visit(window: HWND, param: LPARAM) -> BOOL {
+        let search = &mut *(param.0 as *mut Search);
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(window, Some(&mut pid));
+        if pid == search.pid && IsWindowVisible(window).as_bool() {
+            let mut rect = RECT::default();
+            if GetWindowRect(window, &mut rect).is_ok() {
+                let area = i64::from(rect.right - rect.left) * i64::from(rect.bottom - rect.top);
+                if area > search.area {
+                    search.area = area;
+                    search.best = window.0 as isize;
+                }
+            }
+        }
+        BOOL(1)
+    }
+
+    let parent = parent_process_id().ok_or("cannot find the DSH host process")?;
+    let mut search = Search {
+        pid: parent,
+        best: 0,
+        area: 0,
+    };
+    unsafe {
+        let _ = EnumWindows(Some(visit), LPARAM(&mut search as *mut Search as isize));
+        if search.best == 0 {
+            return Err("the DSH host has no visible window".into());
+        }
+        let window = HWND(search.best as *mut core::ffi::c_void);
+        let _ = ShowWindow(window, SW_RESTORE);
+        let _ = SetForegroundWindow(window);
+    }
+    crate::log::line("focus: raised the host window");
+    Ok(())
+}
+
 /// Hide the selection toolbar and forget its rectangle.
 #[tauri::command]
 fn bubble_hide_toolbar(app: AppHandle) {
@@ -620,6 +712,7 @@ fn main() {
             bubble_quit,
             bubble_open_url,
             bubble_hide_toolbar,
+            bubble_focus_main,
         ])
         .setup(|app| {
             let handle = app.handle().clone();

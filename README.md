@@ -96,24 +96,38 @@ same engine the main dsh session uses — is vendored with its fonts, so math wo
 coalesced with `requestAnimationFrame`, the live bubble survives transcript rebuilds, the run settles only once
 the committed message arrives, and reasoning folds into a "thinking…" block.
 
-**8. Panel auto-collapse rules.** Pinned, running, dragging, a quoted selection, an open drawer, **focus inside
+**8. Three panel defects reported by a user, each fixed with a regression test.**
+
+| Symptom | Root cause | Fix |
+|---|---|---|
+| A newly arrived message did not scroll into view | When the live streaming bubble was still present, the transcript rebuild took the "gentle follow" branch — so a new message arrived **without** moving the viewport | Force-follow when the durable tail changed; streaming deltas still only follow when the reader is already at the bottom, plus a "↓ new message" button when they are not |
+| Prompts sent while the agent was busy were invisible | The host **queues** such prompts, and a queued prompt is not a durable event, so the panel had nothing to render | The panel echoes the prompt as "sent, waiting for the agent" and retires the echo once the session log carries it |
+| Questions from the agent were neither visible nor answerable | The upstream ball had question cards and the renderer rewrite dropped them; and `ctx.userQuestions` is a **single-provider** service owned by the DSH window | Detect a pending `ask_user_question` from `tool/call`, render the question and its options in the panel, and offer a one-click jump to the window that can answer (new `bubble_focus_main`: locate the DSH window through the parent process and activate it) |
+
+This also fixed an unreported defect: **Chromium throttles `requestAnimationFrame` while the panel is collapsed**,
+so streamed answers were not rendered — and the ball is collapsed most of the time. Scheduling now runs on the
+next paint *or* 48 ms, whichever comes first.
+
+**9. Panel auto-collapse rules.** Pinned, running, dragging, a quoted selection, an open drawer, **focus inside
 the panel**, or **the pointer inside the panel** all hold it open. The focus check must also consult the
 *window's* focus: Chromium keeps `document.activeElement` on the composer after the window loses focus, so
 trusting it alone meant the panel never collapsed again.
 
-**9. Diagnostics and regressions.** `~/.dsh/dsh-bubble/shell.log` records lifecycle, exit codes, unhandled
-exceptions, the selection timeline, and toolbar visibility. Five re-runnable checks:
+**10. Diagnostics and regressions.** `~/.dsh/dsh-bubble/shell.log` records lifecycle, exit codes, unhandled
+exceptions, the selection timeline, and toolbar visibility. Six re-runnable checks:
 
 ```
 node scripts/check-host.mjs       # host modules load
-node scripts/smoke-host.mjs       # full host HTTP surface + streaming deltas over SSE
+node scripts/smoke-host.mjs       # full host HTTP surface + streaming deltas + pending-question detection
 node scripts/check-markdown.mjs   # renderer as a pure function (52 assertions, incl. XSS cases)
 node scripts/check-render.mjs     # real headless Chromium with real KaTeX, asserting the DOM (22 assertions)
 node scripts/check-collapse.mjs   # panel collapse behaviour, driving the real panel headlessly (works offline)
+node scripts/check-panel.mjs      # new-message follow, queued echo, question card (16 assertions)
 ```
 
 `check-collapse` was **mutation-tested**: removing the focus guard fails case 1; removing the window-focus
-guard fails case 2. It genuinely catches both regressions instead of always passing.
+guard fails case 2. `check-panel` likewise caught two real bugs while it was being written (no jump on a new
+message, and unthrottled-render failure) rather than passing from the start.
 
 ## Install
 

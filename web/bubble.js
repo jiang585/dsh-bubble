@@ -45,6 +45,10 @@
 
   const statusLine = document.getElementById('status')
   const usageLine = document.getElementById('usage')
+  const jumpLatest = document.getElementById('jump-latest')
+  const questionCard = document.getElementById('question-card')
+  const questionList = document.getElementById('question-list')
+  const questionJump = document.getElementById('question-jump')
   const selectionChip = document.getElementById('selection-chip')
   const selectionChipText = document.getElementById('selection-chip-text')
   const selectionChipDismiss = document.getElementById('selection-chip-dismiss')
@@ -62,9 +66,18 @@
     theme: 'light',
     model: null,
     usage: null,
+    question: null,
     messages: [],
     history: [],
   }
+
+  /**
+   * Messages this panel has sent that have not reached the session log yet.
+   *
+   * A prompt sent while the agent is busy is queued by the host, and a queued prompt is not a durable
+   * event: without this echo the user sees nothing at all until the running turn finishes.
+   */
+  let pendingSends = []
 
   let windowState = {
     ball: { x: 0, y: 0 },
@@ -146,8 +159,13 @@
       case 'usage':
         applyUsage(event.usage)
         return
+      case 'question':
+        applyQuestion(event.question)
+        return
       case 'reset':
         endStream()
+        clearPending()
+        applyQuestion(null)
         rows = new Map()
         transcript.replaceChildren()
         conversation.sessionId = event.sessionId
@@ -169,6 +187,7 @@
     conversation.model = state.model ?? null
     setTheme(state.theme ?? 'light')
     applyUsage(state.usage)
+    applyQuestion(state.question ?? null)
     renderModelChip()
     setRunning(Boolean(state.running))
     if (Array.isArray(state.messages)) renderTranscript(state.messages)
@@ -178,6 +197,57 @@
     if (usage === undefined || usage === null) return
     conversation.usage = usage
     renderUsage()
+  }
+
+  /**
+   * Render the agent's pending question.
+   *
+   * The ball cannot submit the answer: `ctx.userQuestions` allows exactly one provider and the DSH
+   * window's client owns it, so hijacking it would break the main window. What the ball can do is
+   * make the question impossible to miss and put the user in front of the surface that can answer.
+   *
+   * @param question - `{ callId, questions }` from the host, or null once it is resolved.
+   */
+  function applyQuestion(question) {
+    conversation.question = question ?? null
+    const items = conversation.question?.questions ?? []
+    if (items.length === 0) {
+      questionCard.hidden = true
+      return
+    }
+    questionList.replaceChildren()
+    for (const item of items) {
+      const block = document.createElement('div')
+      block.className = 'question-item'
+      if (typeof item.header === 'string' && item.header !== '') {
+        const header = document.createElement('p')
+        header.className = 'question-header'
+        header.textContent = item.header
+        block.append(header)
+      }
+      const text = document.createElement('p')
+      text.className = 'question-text'
+      text.textContent = item.question
+      block.append(text)
+      if (Array.isArray(item.options) && item.options.length > 0) {
+        const options = document.createElement('ul')
+        options.className = 'question-options'
+        for (const option of item.options) {
+          const entry = document.createElement('li')
+          entry.textContent = option.label
+          if (typeof option.description === 'string' && option.description !== '') {
+            entry.textContent = `${option.label} — ${option.description}`
+          }
+          options.append(entry)
+        }
+        block.append(options)
+      }
+      questionList.append(block)
+    }
+    questionCard.hidden = false
+    statusLine.textContent = 'Agent 正在等你回答'
+    void setExpanded(true)
+    scrollToEnd(true)
   }
 
   function formatTokens(value) {
@@ -542,7 +612,6 @@
   let stream = { active: false, text: '', reasoning: '', settled: false, row: null, bubble: null, frame: undefined, settleTimer: undefined }
 
   function updateStreamRow() {
-    stream.frame = undefined
     if (!stream.active) return
     if (stream.row === null || !stream.row.isConnected) {
       stream.row = document.createElement('div')
@@ -564,10 +633,48 @@
     scrollToEnd()
   }
 
+  /**
+   * Run a callback after the next paint, but never later than a short timeout.
+   *
+   * Chromium throttles `requestAnimationFrame` in an occluded, collapsed, or minimized webview, and the
+   * ball is collapsed most of the time: without the timeout a streamed answer would sit unseen until
+   * the user reopened the panel. Whichever fires first wins; the other is cancelled.
+   *
+   * @param callback - Work to run once.
+   * @returns Handle accepted by {@link cancelPaint}.
+   */
+  function nextPaint(callback) {
+    const handle = { frame: undefined, timer: undefined, done: false }
+    const run = () => {
+      if (handle.done) return
+      handle.done = true
+      cancelPaint(handle)
+      callback()
+    }
+    handle.frame = requestAnimationFrame(run)
+    handle.timer = setTimeout(run, 48)
+    return handle
+  }
+
+  /**
+   * Cancel a pending {@link nextPaint}.
+   * @param handle - Handle returned by `nextPaint`.
+   */
+  function cancelPaint(handle) {
+    if (handle === undefined) return
+    if (handle.frame !== undefined) cancelAnimationFrame(handle.frame)
+    if (handle.timer !== undefined) clearTimeout(handle.timer)
+    handle.frame = undefined
+    handle.timer = undefined
+  }
+
   /** Coalesce token bursts into one DOM update per frame. */
   function scheduleStreamRender() {
     if (stream.frame !== undefined) return
-    stream.frame = requestAnimationFrame(updateStreamRow)
+    stream.frame = nextPaint(() => {
+      stream.frame = undefined
+      updateStreamRow()
+    })
   }
 
   function beginStream() {
@@ -613,6 +720,10 @@
   }
 
   function renderTranscript(messages) {
+    // A rebuilt transcript that carries a new tail is a new message for the reader: follow it even if
+    // they had scrolled back. A rebuild that only updates existing rows must not move the viewport.
+    const previousTail = conversation.messages.at(-1)?.id
+    const tailChanged = messages.at(-1)?.id !== previousTail || messages.length > conversation.messages.length
     conversation.messages = messages
     rows = new Map()
     transcript.replaceChildren()
@@ -632,9 +743,12 @@
       stream.row = null
       stream.bubble = null
       updateStreamRow()
+      scrollToEnd(tailChanged)
     } else {
-      scrollToEnd()
+      scrollToEnd(true)
     }
+    settlePending(messages)
+    renderPending()
   }
 
   function appendMessage(message) {
@@ -644,7 +758,9 @@
     rows.set(message.id, row)
     if (stream.row !== null && stream.row.isConnected) transcript.insertBefore(row, stream.row)
     else transcript.append(row)
-    scrollToEnd()
+    // A new message is the user's reason to look at the panel: always follow it.
+    scrollToEnd(true)
+    settlePending(conversation.messages)
   }
 
   function updateMessage(message) {
@@ -658,6 +774,7 @@
     row.replaceWith(next)
     rows.set(message.id, next)
     scrollToEnd()
+    settlePending(conversation.messages)
   }
 
   function appendDelta(id, kind, text) {
@@ -669,11 +786,78 @@
     scheduleStreamRender()
   }
 
-  /** Only follow the tail when the reader is already at the bottom. */
-  function scrollToEnd() {
-    const distance = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight
-    if (distance > 48) return
+  /** True when the reader is close enough to the tail to be following it. */
+  function atTail() {
+    return transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight <= 48
+  }
+
+  /**
+   * Follow the transcript tail.
+   *
+   * @param force - When true, jump to the newest content even if the reader scrolled away. Used for
+   *   new messages, prompts this panel sent, and an arriving question; streaming deltas keep the
+   *   gentler follow so reading back through a long answer is not yanked away.
+   */
+  function scrollToEnd(force = false) {
+    if (!force && !atTail()) {
+      jumpLatest.hidden = false
+      return
+    }
     transcript.scrollTop = transcript.scrollHeight
+    jumpLatest.hidden = true
+    // Images and math load after the height is computed; re-pin once more after layout settles.
+    nextPaint(() => {
+      if (force || atTail()) {
+        transcript.scrollTop = transcript.scrollHeight
+        jumpLatest.hidden = true
+      }
+    })
+  }
+
+  /** Echo prompts that the host has accepted but that are not in the session log yet. */
+  function renderPending() {
+    for (const entry of pendingSends) {
+      if (entry.row !== undefined && entry.row.isConnected) continue
+      const row = document.createElement('div')
+      row.className = 'row row-user row-pending'
+      const bubble = document.createElement('div')
+      bubble.className = 'bubble'
+      bubble.textContent = entry.text
+      const tag = document.createElement('span')
+      tag.className = 'pending-tag'
+      tag.textContent = '已发出，等待 Agent 处理…'
+      bubble.append(tag)
+      row.append(bubble)
+      entry.row = row
+      transcript.append(row)
+    }
+  }
+
+  /**
+   * Retire queued echoes once the durable transcript carries them.
+   *
+   * Matching on text is enough here: a queued prompt becomes a `user/message` event with the same
+   * text, and two identical prompts in a row still both reach the log.
+   *
+   * @param messages - The durable transcript.
+   */
+  function settlePending(messages) {
+    if (pendingSends.length === 0) return
+    const texts = messages.filter((message) => message.role === 'user').map((message) => message.text)
+    const kept = []
+    for (const entry of pendingSends) {
+      if (texts.includes(entry.text)) {
+        entry.row?.remove()
+        continue
+      }
+      kept.push(entry)
+    }
+    pendingSends = kept
+  }
+
+  function clearPending() {
+    for (const entry of pendingSends) entry.row?.remove()
+    pendingSends = []
   }
 
   function setRunning(running) {
@@ -932,6 +1116,12 @@
     clearSelection()
     try {
       await request('/message', { text: payload })
+      // The host accepts prompts while the agent is running by queueing them, and a queued prompt is
+      // not a durable event. Echo it locally so the user can see what they sent.
+      pendingSends.push({ text: payload })
+      renderPending()
+      scrollToEnd(true)
+      if (conversation.running) statusLine.textContent = '已排队，等当前回答结束'
     } catch (error) {
       statusLine.textContent = `发送失败：${String(error)}`
     }
@@ -954,6 +1144,18 @@
   // ---------------------------------------------------------------- Pin & Close
 
   function wireWindowControls() {
+    jumpLatest.addEventListener('click', () => {
+      scrollToEnd(true)
+      prompt.focus()
+    })
+    transcript.addEventListener('scroll', () => {
+      if (atTail()) jumpLatest.hidden = true
+      else if (conversation.messages.length > 0 || pendingSends.length > 0) jumpLatest.hidden = false
+    })
+    questionJump.addEventListener('click', () => {
+      void shell('bubble_focus_main')
+    })
+
     // 固定状态切换
     document.body.classList.toggle('pinned', pinned)
     pinButton.addEventListener('click', () => {
