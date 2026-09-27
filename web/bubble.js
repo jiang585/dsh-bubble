@@ -23,7 +23,7 @@
    * writes it to `~/.dsh/dsh-bubble/shell.log` at startup, which is the only reliable way to tell which
    * build a running ball actually loaded.
    */
-  const PANEL_REVISION = '2026-09-27.2-question-card'
+  const PANEL_REVISION = '2026-09-27.3-robust-focus'
 
   const tauri = window.__TAURI__
   const invoke = tauri?.core?.invoke
@@ -258,6 +258,9 @@
     statusLine.textContent = 'Agent 正在等你回答'
     void setExpanded(true)
     scrollToEnd(true)
+    // Flash the taskbar so the prompt is noticed even when the panel is collapsed; unlike raising the
+    // window this never steals focus from whatever the user is typing in.
+    void shell('bubble_flash_main')
   }
 
   function formatTokens(value) {
@@ -1162,8 +1165,22 @@
       if (atTail()) jumpLatest.hidden = true
       else if (conversation.messages.length > 0 || pendingSends.length > 0) jumpLatest.hidden = false
     })
-    questionJump.addEventListener('click', () => {
-      void shell('bubble_focus_main')
+    questionJump.addEventListener('click', async () => {
+      const label = questionJump.textContent
+      questionJump.disabled = true
+      shellFailure = ''
+      const result = await shell('bubble_focus_main')
+      questionJump.disabled = false
+      if (result === undefined && shellFailure !== '') {
+        // Never leave a silent no-op: report what failed instead.
+        questionJump.textContent = '激活失败，请手动切到 DSH 窗口'
+        statusLine.textContent = `无法激活 DSH 主窗口：${shellFailure}`
+        setTimeout(() => {
+          questionJump.textContent = label
+        }, 3000)
+        return
+      }
+      statusLine.textContent = '已切到 DSH 主窗口，请在那里回答'
     })
 
     // 固定状态切换

@@ -481,29 +481,82 @@ fn parent_process_id() -> Option<u32> {
     }
 }
 
-/**
- * Bring the DSH window that launched this shell to the foreground.
- *
- * The ball is a child of the DSH host, and the host owns the only surface that can answer an
- * `ask_user_question` prompt (the `userQuestions` service allows one provider). When the agent is
- * blocked on the user, this is the button that puts them in front of the window that can answer.
- */
-#[tauri::command]
-fn bubble_focus_main() -> Result<(), String> {
+/// Full image path of a process, when the caller may query it.
+fn process_image_path(pid: u32) -> Option<String> {
+    use windows::core::PWSTR;
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buffer = [0u16; 1024];
+        let mut size = buffer.len() as u32;
+        let result = QueryFullProcessImageNameW(
+            handle,
+            PROCESS_NAME_WIN32,
+            PWSTR(buffer.as_mut_ptr()),
+            &mut size,
+        );
+        let _ = CloseHandle(handle);
+        result.ok()?;
+        Some(String::from_utf16_lossy(&buffer[..size as usize]))
+    }
+}
+
+/// Every process id currently running an image with the given full path.
+fn pids_running(image: &str) -> Vec<u32> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+
+    let mut pids = Vec::new();
+    unsafe {
+        let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+            return pids;
+        };
+        let mut entry = PROCESSENTRY32W::default();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        if Process32FirstW(snapshot, &mut entry).is_ok() {
+            loop {
+                let pid = entry.th32ProcessID;
+                if pid != 0 {
+                    if let Some(path) = process_image_path(pid) {
+                        if path.eq_ignore_ascii_case(image) {
+                            pids.push(pid);
+                        }
+                    }
+                }
+                if Process32NextW(snapshot, &mut entry).is_err() {
+                    break;
+                }
+            }
+        }
+        let _ = CloseHandle(snapshot);
+    }
+    pids
+}
+
+/// Largest visible top-level window owned by any of `pids`, with its title.
+fn largest_window_of(pids: &[u32]) -> Option<(windows::Win32::Foundation::HWND, String)> {
     use windows::core::BOOL;
     use windows::Win32::Foundation::{HWND, LPARAM, RECT};
     use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow,
-        ShowWindow, SW_RESTORE,
+        EnumWindows, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
+        IsWindowVisible,
     };
 
     /// Carries the search state through `EnumWindows`.
-    struct Search {
-        /// Process whose window is wanted.
-        pid: u32,
+    struct Search<'a> {
+        /// Processes whose windows are wanted.
+        pids: &'a [u32],
         /// Best handle found so far, as a raw pointer value.
         best: isize,
-        /// Area of the best handle, for picking the main window over tooltips.
+        /// Area of the best handle, so the main window wins over tooltips and shadows.
         area: i64,
     }
 
@@ -511,7 +564,7 @@ fn bubble_focus_main() -> Result<(), String> {
         let search = &mut *(param.0 as *mut Search);
         let mut pid = 0u32;
         GetWindowThreadProcessId(window, Some(&mut pid));
-        if pid == search.pid && IsWindowVisible(window).as_bool() {
+        if search.pids.contains(&pid) && IsWindowVisible(window).as_bool() {
             let mut rect = RECT::default();
             if GetWindowRect(window, &mut rect).is_ok() {
                 let area = i64::from(rect.right - rect.left) * i64::from(rect.bottom - rect.top);
@@ -524,23 +577,184 @@ fn bubble_focus_main() -> Result<(), String> {
         BOOL(1)
     }
 
-    let parent = parent_process_id().ok_or("cannot find the DSH host process")?;
     let mut search = Search {
-        pid: parent,
+        pids,
         best: 0,
         area: 0,
     };
     unsafe {
         let _ = EnumWindows(Some(visit), LPARAM(&mut search as *mut Search as isize));
         if search.best == 0 {
-            return Err("the DSH host has no visible window".into());
+            return None;
         }
         let window = HWND(search.best as *mut core::ffi::c_void);
-        let _ = ShowWindow(window, SW_RESTORE);
-        let _ = SetForegroundWindow(window);
+        let length = GetWindowTextLengthW(window);
+        let mut buffer = vec![0u16; length as usize + 1];
+        let written = GetWindowTextW(window, &mut buffer);
+        Some((window, String::from_utf16_lossy(&buffer[..written as usize])))
     }
-    crate::log::line("focus: raised the host window");
+}
+
+/// Resolve the host window for `--focus-main-check`, optionally against an explicit process id.
+fn host_main_window_for(pid: Option<u32>) -> Result<(windows::Win32::Foundation::HWND, String), String> {
+    let pid = match pid {
+        Some(value) => value,
+        None => parent_process_id().ok_or("找不到启动悬浮球壳的进程")?,
+    };
+    let image = process_image_path(pid).ok_or("无法读取宿主进程的可执行文件路径")?;
+    let pids = pids_running(&image);
+    if pids.is_empty() {
+        return Err("找不到与宿主同属一个应用的进程".into());
+    }
+    let (window, title) = largest_window_of(&pids).ok_or("宿主应用当前没有可见窗口")?;
+    Ok((window, title))
+}
+
+/// The DSH application window, resolved through the executable that launched this shell.
+///
+/// The immediate parent is an Electron helper process, and helper processes own no windows at all, so
+/// the resolution matches every process running the same executable image and takes the largest visible
+/// window among them. `Err` carries why it failed, because a silent no-op on the button is worse than
+/// an error the panel can show.
+fn host_main_window() -> Result<(windows::Win32::Foundation::HWND, String), String> {
+    host_main_window_for(None)
+}
+
+/// Raise one window to the foreground, working around the Windows foreground lock.
+///
+/// A process that is not already foreground may not call `SetForegroundWindow` successfully; Windows
+/// silently ignores it and only flashes the taskbar. Attaching to the foreground thread's input queue
+/// for the duration of the call is the documented way around that.
+fn raise_window(window: windows::Win32::Foundation::HWND) -> bool {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+    use windows::Win32::UI::Input::KeyboardAndMouse::SetActiveWindow;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, IsIconic,
+        SetForegroundWindow, ShowWindow, SW_RESTORE,
+    };
+
+    unsafe {
+        if IsIconic(window).as_bool() {
+            let _ = ShowWindow(window, SW_RESTORE);
+        }
+        let target_thread = GetWindowThreadProcessId(window, None);
+        let foreground = GetForegroundWindow();
+        let foreground_thread = if foreground.0.is_null() {
+            0
+        } else {
+            GetWindowThreadProcessId(foreground, None)
+        };
+        let own_thread = GetCurrentThreadId();
+
+        let attached_foreground =
+            foreground_thread != 0 && AttachThreadInput(own_thread, foreground_thread, true).as_bool();
+        let attached_target =
+            target_thread != 0 && target_thread != own_thread && AttachThreadInput(own_thread, target_thread, true).as_bool();
+
+        let _ = BringWindowToTop(window);
+        let _ = SetForegroundWindow(window);
+        let _ = SetActiveWindow(window);
+
+        if attached_target {
+            let _ = AttachThreadInput(own_thread, target_thread, false);
+        }
+        if attached_foreground {
+            let _ = AttachThreadInput(own_thread, foreground_thread, false);
+        }
+
+        GetForegroundWindow() == HWND(window.0)
+    }
+}
+
+/// Attention-grabbing taskbar flash, used when the window must not steal focus.
+fn flash_window(window: windows::Win32::Foundation::HWND) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        FlashWindowEx, FLASHWINFO, FLASHW_ALL, FLASHW_TIMERNOFG,
+    };
+
+    let mut info = FLASHWINFO {
+        cbSize: std::mem::size_of::<FLASHWINFO>() as u32,
+        hwnd: window,
+        dwFlags: FLASHW_ALL | FLASHW_TIMERNOFG,
+        uCount: 0,
+        dwTimeout: 0,
+    };
+    unsafe {
+        let _ = FlashWindowEx(&mut info);
+    }
+}
+
+/**
+ * Bring the DSH window to the foreground.
+ *
+ * The ball is a child of the DSH host, and the host owns the only surface that can answer an
+ * `ask_user_question` prompt (the `userQuestions` service allows one provider). When the agent is
+ * blocked on the user, this is the button that puts them in front of the window that can answer.
+ */
+#[tauri::command]
+fn bubble_focus_main() -> Result<(), String> {
+    let (window, title) = host_main_window()?;
+    let raised = raise_window(window);
+    crate::log::line(&format!(
+        "focus: target={title:?} handled={} raised={raised}",
+        !window.0.is_null()
+    ));
+    if !raised {
+        return Err("系统拒绝了窗口激活（前台锁），已改为闪烁任务栏提示".into());
+    }
     Ok(())
+}
+
+/// Flash the DSH window in the taskbar without taking focus.
+#[tauri::command]
+fn bubble_flash_main() -> Result<(), String> {
+    let (window, _title) = host_main_window()?;
+    flash_window(window);
+    crate::log::line("focus: flashed the host window taskbar button");
+    Ok(())
+}
+
+/// One-shot diagnostic used by `--focus-main-check[=pid]`: resolve and report, change nothing.
+pub fn focus_main_check(explicit_pid: Option<u32>) {
+    let source = match explicit_pid {
+        Some(pid) => format!("pid {pid} (given)"),
+        None => match parent_process_id() {
+            Some(pid) => format!("pid {pid} (parent)"),
+            None => "unknown".to_string(),
+        },
+    };
+    let image = explicit_pid
+        .or_else(parent_process_id)
+        .and_then(process_image_path)
+        .unwrap_or_else(|| "(unresolved)".to_string());
+    println!("host    : {source}");
+    println!("image   : {image}");
+    match host_main_window_for(explicit_pid) {
+        Ok((window, title)) => {
+            let raised = raise_window(window);
+            let (rect, pid) = unsafe {
+                use windows::Win32::Foundation::RECT;
+                use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, GetWindowThreadProcessId};
+                let mut rect = RECT::default();
+                let _ = GetWindowRect(window, &mut rect);
+                let mut pid = 0u32;
+                GetWindowThreadProcessId(window, Some(&mut pid));
+                (rect, pid)
+            };
+            println!("resolved: hwnd={:?} pid={pid}", window.0);
+            println!("title   : {title}");
+            println!(
+                "bounds  : {},{} {}x{}",
+                rect.left,
+                rect.top,
+                rect.right - rect.left,
+                rect.bottom - rect.top
+            );
+            println!("raised  : {raised}");
+        }
+        Err(reason) => println!("failed  : {reason}"),
+    }
 }
 
 /// Hide the selection toolbar and forget its rectangle.
@@ -700,6 +914,16 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 }
 
 fn main() {
+    // Offline diagnostic: report which window the focus button would raise, then exit without
+    // touching the UI. Lets the resolution be verified without a running DSH and without clicking.
+    // `--focus-main-check=<pid>` checks against an explicit host process, for runs started by hand.
+    if let Some(argument) = std::env::args().find(|value| value.starts_with("--focus-main-check")) {
+        let explicit = argument
+            .split_once('=')
+            .and_then(|(_, value)| value.trim().parse::<u32>().ok());
+        focus_main_check(explicit);
+        return;
+    }
     install_crash_log();
     install_exception_log();
     crate::log::line(&format!("start pid={}", std::process::id()));
@@ -723,6 +947,7 @@ fn main() {
             bubble_open_url,
             bubble_hide_toolbar,
             bubble_focus_main,
+            bubble_flash_main,
             bubble_panel_ready,
         ])
         .setup(|app| {

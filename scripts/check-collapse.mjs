@@ -9,7 +9,7 @@
  * Run: node scripts/check-collapse.mjs
  */
 import { execFileSync } from 'node:child_process'
-import { existsSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
 
@@ -44,14 +44,19 @@ let fileMode = false
 try {
   const response = await fetch(target, { signal: AbortSignal.timeout(4000) })
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
-} catch {
+  // The plugin serves its installed copy. If that copy is not the working tree, the run would exercise
+  // stale code and report a false result, so compare before trusting it.
+  const served = (await response.text()).replaceAll('\r\n', '\n')
+  const working = readFileSync(localProbe, 'utf8').replaceAll('\r\n', '\n')
+  if (served !== working) throw new Error('the installed probe differs from the working tree')
+} catch (error) {
   if (!existsSync(localProbe)) {
     console.error(`check-collapse: the plugin is not serving the panel and ${localProbe} is missing`)
     process.exit(1)
   }
   target = `${pathToFileURL(localProbe).href}?v=${Date.now()}`
   fileMode = true
-  console.log('check-collapse: DSH is not serving the panel; loading the working tree over file://')
+  console.log(`check-collapse: using the working tree over file:// (${error.message})`)
 }
 
 let dom

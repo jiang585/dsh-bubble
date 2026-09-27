@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh">
   <head>
     <meta charset="UTF-8">
@@ -35,6 +35,10 @@
               window.__probe.calls.push(command);
               if (command === 'bubble_environment') {
                 return { api_base: 'http://probe.invalid/dsh-bubble', token: 'probe', locale: 'zh', ball_size: 72 };
+              }
+              // Failure injection: a refused focus command must surface an error, never a silent no-op.
+              if (command === 'bubble_focus_main' && window.__probe.failFocus === true) {
+                throw new Error('系统拒绝了窗口激活');
               }
               return null;
             } },
@@ -96,6 +100,7 @@
         const bubble = doc.getElementById('ball')
         const prompt = doc.getElementById('prompt')
         const jumpLatest = doc.getElementById('jump-latest')
+        const statusLine = doc.getElementById('status')
         const questionCard = doc.getElementById('question-card')
         const failures = []
 
@@ -179,11 +184,25 @@
         check('提问卡片出现', questionCard.hidden === false)
         check('问题正文渲染', questionCard.textContent.includes('要部署到生产环境吗？'))
         check('选项渲染', questionCard.querySelectorAll('.question-options li').length === 2)
+        check('提问时闪任务栏提醒', probe.calls.includes('bubble_flash_main'), `calls=${probe.calls.join(',')}`)
+
         const before = probe.calls.length
         doc.getElementById('question-jump').click()
         await sleep(300)
         check('跳转按钮调用 bubble_focus_main',
           probe.calls.slice(before).includes('bubble_focus_main'), `calls=${probe.calls.join(',')}`)
+        check('成功后给出提示', statusLine.textContent.includes('已切到 DSH 主窗口'))
+
+        // A refused activation must be reported in the panel, not swallowed.
+        probe.failFocus = true
+        doc.getElementById('question-jump').click()
+        await sleep(400)
+        check('激活失败时显示原因',
+          statusLine.textContent.includes('无法激活 DSH 主窗口') && statusLine.textContent.includes('系统拒绝了窗口激活'),
+          `status=${JSON.stringify(statusLine.textContent)}`)
+        check('失败时按钮文案改变',
+          doc.getElementById('question-jump').textContent.includes('激活失败'))
+        probe.failFocus = false
 
         // A resolved question clears the card.
         probe.push({ type: 'question', question: null })
