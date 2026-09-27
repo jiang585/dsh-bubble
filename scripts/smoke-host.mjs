@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Smoke-test the plugin against a fake harness: mount it, drive its HTTP surface, and assert the
  * harness calls it makes. This runs before anything touches a live profile.
  *
@@ -190,7 +190,7 @@ function openEventStream(ctx, token) {
     },
     writeHead: (code, extra) => {
       status = code
-      Object.assign(headers, extra ?? {})
+      for (const [key, value] of Object.entries(extra ?? {})) headers[key.toLowerCase()] = value
     },
     write: (chunk) => {
       text += chunk
@@ -400,6 +400,21 @@ try {
   assert.equal(questionFrames().at(-1).question, null)
   const reopened = await callRoute(ctx, '/dsh-bubble/state')
   assert.equal(reopened.json.question, null, 'the snapshot must not carry a resolved question')
+
+  // The static prefix must serve the panel that a webview pointed at this plugin renders, with usable
+  // content types. This is the HTTP half of the panel delivery; the layout half lives in check-panel.
+  const index = await callRoute(ctx, '/dsh-bubble/index.html')
+  assert.equal(index.status, 200, `panel index must be served: ${index.text.slice(0, 120)}`)
+  assert.match(String(index.headers['content-type'] ?? ''), /text\/html/u)
+  assert.ok(index.text.includes('question-card'), 'the served panel must carry the question card')
+  assert.ok(index.text.includes('jump-latest'), 'the served panel must carry the new-message button')
+  for (const asset of ['/dsh-bubble/bubble.css', '/dsh-bubble/bubble.js', '/dsh-bubble/markdown.js']) {
+    const served = await callRoute(ctx, asset)
+    assert.equal(served.status, 200, `${asset} must be served`)
+    assert.ok(String(served.headers['content-type'] ?? '').length > 0, `${asset} needs a content type`)
+  }
+  const missing = await callRoute(ctx, '/dsh-bubble/definitely-missing.css')
+  assert.equal(missing.status, 404, 'a missing asset must not be reported as served')
 
   // Dispose every mounted effect so the heartbeat timer cannot keep this process alive.
   for (const dispose of ctx.effects.reverse()) {

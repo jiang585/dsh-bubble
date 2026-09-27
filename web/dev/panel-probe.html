@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="zh">
   <head>
     <meta charset="UTF-8">
@@ -18,7 +18,7 @@
       check-panel.mjs` runs this through headless Chromium and reads data-result from the dumped DOM.
     -->
     <div id="out" data-result="pending">running…</div>
-    <iframe id="frame" width="360" height="560" style="border:1px solid #ccc"></iframe>
+    <iframe id="frame" width="344" height="444" style="border:1px solid #ccc"></iframe>
     <script>
       const out = document.getElementById('out')
       const log = []
@@ -93,16 +93,33 @@
       async function main() {
         const frame = document.getElementById('frame')
         const doc = await mountPanel(frame)
-        await sleep(700)
         const win = frame.contentWindow
+        /**
+         * Wait until the panel's stylesheets have been applied.
+         *
+         * Over HTTP the styles arrive after the markup; without this gate a measurement can run against
+         * an unstyled page and report a layout bug that does not exist. The probe checks a custom
+         * property that only the stylesheet defines, because the panel itself is collapsed (and so has
+         * no size at all) until the ball is clicked.
+         */
+        const waitForStyles = async (timeoutMs = 8000) => {
+          const started = Date.now()
+          while (Date.now() - started < timeoutMs) {
+            const chrome = win.getComputedStyle(doc.documentElement).getPropertyValue('--chrome').trim()
+            if (chrome !== '') return { chrome, sheets: doc.styleSheets.length }
+            await sleep(100)
+          }
+          return undefined
+        }
+        await sleep(200)
         const probe = win.__probe
+        const failures = []
         const transcript = doc.getElementById('transcript')
         const bubble = doc.getElementById('ball')
         const prompt = doc.getElementById('prompt')
         const jumpLatest = doc.getElementById('jump-latest')
         const statusLine = doc.getElementById('status')
         const questionCard = doc.getElementById('question-card')
-        const failures = []
 
         /** Record one assertion. */
         const check = (name, ok, detail) => {
@@ -111,6 +128,27 @@
         }
 
         check('panel mounted', typeof probe?.push === 'function', `calls=${probe?.calls?.join(',') ?? 'none'}`)
+        const styles = await waitForStyles()
+        check('样式已加载', styles !== undefined,
+          styles === undefined ? 'stylesheet never applied' : `--chrome=${styles.chrome} sheets=${styles.sheets}`)
+        if (styles === undefined) {
+          out.dataset.result = 'fail'
+          say('FAIL: 面板样式未加载，后续布局断言无意义')
+          return
+        }
+        // Diagnostics: which sheets actually arrived, and how the panel is laid out.
+        for (const sheet of doc.styleSheets) {
+          let rules = -1
+          try {
+            rules = sheet.cssRules.length
+          } catch {
+            rules = -1
+          }
+          say(`sheet ${sheet.href ?? '(inline)'} rules=${rules}`)
+        }
+        const panelStyle = win.getComputedStyle(doc.getElementById('panel'))
+        say(`panel style: position=${panelStyle.position} inset=${panelStyle.inset} `
+          + `bodyHeight=${win.getComputedStyle(doc.body).height} htmlHeight=${win.getComputedStyle(doc.documentElement).height}`)
 
         // Expand the panel through the real ball click handler.
         pointer(win, bubble, 'pointerdown', 40, 40)
@@ -208,6 +246,40 @@
         probe.push({ type: 'question', question: null })
         await sleep(200)
         check('提问解决后卡片隐藏', questionCard.hidden === true)
+
+        // --- 4. A very long question must not push the button or the composer out of the panel.
+        const longText = '这是一段很长的提问正文，用来把卡片撑高。'.repeat(12)
+        const manyOptions = []
+        for (let index = 1; index <= 12; index += 1) {
+          manyOptions.push({ label: `选项 ${index}`, description: '附带的说明文字也会占高度' })
+        }
+        probe.push({
+          type: 'question',
+          question: {
+            callId: 'call-long',
+            questions: [
+              { id: 'q1', header: '确认', question: longText, options: manyOptions },
+              { id: 'q2', header: '补充', question: longText, options: manyOptions },
+            ],
+          },
+        })
+        await sleep(400)
+        const panelRect = doc.getElementById('panel').getBoundingClientRect()
+        const jumpRect = doc.getElementById('question-jump').getBoundingClientRect()
+        const composerRect = doc.getElementById('composer').getBoundingClientRect()
+        const questionList = doc.getElementById('question-list')
+        const inside = (rect) => rect.top >= panelRect.top - 1 && rect.bottom <= panelRect.bottom + 1
+        check('超长提问时跳转按钮仍在面板内', inside(jumpRect),
+          `btn=${Math.round(jumpRect.top)}..${Math.round(jumpRect.bottom)} panel=${Math.round(panelRect.top)}..${Math.round(panelRect.bottom)}`)
+        check('超长提问时输入框仍在面板内', inside(composerRect),
+          `composer=${Math.round(composerRect.top)}..${Math.round(composerRect.bottom)}`)
+        check('超长提问时对话区仍可见', transcript.getBoundingClientRect().height > 24,
+          `h=${Math.round(transcript.getBoundingClientRect().height)}`)
+        check('问答列表可内部滚动', questionList.scrollHeight > questionList.clientHeight + 4,
+          `scroll=${questionList.scrollHeight} client=${questionList.clientHeight}`)
+        check('卡片不会超出手面板高度', questionCard.getBoundingClientRect().height <= panelRect.height * 0.5,
+          `card=${Math.round(questionCard.getBoundingClientRect().height)} panel=${Math.round(panelRect.height)}`)
+        probe.push({ type: 'question', question: null })
 
         say(`pushes=${probe.pushes.join(',')}`)
         out.dataset.result = failures.length === 0 ? 'pass' : 'fail'

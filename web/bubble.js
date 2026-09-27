@@ -1,4 +1,4 @@
-/**
+﻿/**
  * DSH Bubble ball renderer - Gemini Ultra-Modern Edition.
  *
  * Runs inside the Tauri ball window or in a browser. Delivers a clean, layered HUD with
@@ -23,7 +23,7 @@
    * writes it to `~/.dsh/dsh-bubble/shell.log` at startup, which is the only reliable way to tell which
    * build a running ball actually loaded.
    */
-  const PANEL_REVISION = '2026-09-27.3-robust-focus'
+  const PANEL_REVISION = '2026-09-27.4-question-fit'
 
   const tauri = window.__TAURI__
   const invoke = tauri?.core?.invoke

@@ -38,9 +38,16 @@
   text-align: right;
 }
 
-/* 提问卡片 */
+/* 提问卡片
+   面板只有 344×444：问题一长，卡片会被自身内容撑高，把跳转按钮和输入框挤出可视区。
+   所以卡片整体限高，只有中间的问答列表滚动，头部与按钮永远留在可见范围内。 */
 #question-card {
   flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  /* 上限取面板高度的一部分，保证对话区与输入框都还在 */
+  max-height: 44%;
+  min-height: 0;
   margin: 6px 0;
   padding: 10px 12px;
   border: 1px solid var(--primary);
@@ -54,9 +61,19 @@
 }
 
 .question-head {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   margin-bottom: 6px;
+}
+
+/* 唯一的滚动区域：长问题与多选项都在这里滚，不动按钮 */
+#question-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
 }
 
 .question-badge {
@@ -100,6 +117,7 @@
 }
 
 #question-jump {
+  flex: 0 0 auto;
   display: block;
   width: 100%;
   margin-top: 10px;

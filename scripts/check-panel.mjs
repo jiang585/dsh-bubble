@@ -9,7 +9,7 @@
  * Run: node scripts/check-panel.mjs
  */
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, rmSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
 
@@ -37,26 +37,18 @@ if (browser === undefined) {
   process.exit(1)
 }
 
-// Cache-busting query: headless Chromium reuses the probe profile between runs and would otherwise
-// keep executing yesterday's probe page.
-let target = `http://127.0.0.1:${PORT}/dsh-bubble/dev/panel-probe.html?v=${Date.now()}`
-let fileMode = false
-try {
-  const response = await fetch(target, { signal: AbortSignal.timeout(4000) })
-  if (!response.ok) throw new Error(`HTTP ${response.status}`)
-  // The plugin serves its installed copy. If that copy is not the working tree, the run would exercise
-  // stale code and report a false result, so compare before trusting it.
-  const served = (await response.text()).replaceAll('\r\n', '\n')
-  const working = readFileSync(localProbe, 'utf8').replaceAll('\r\n', '\n')
-  if (served !== working) throw new Error('the installed probe differs from the working tree')
-} catch (error) {
-  if (!existsSync(localProbe)) {
-    console.error(`check-panel: the plugin is not serving the panel and ${localProbe} is missing`)
-    process.exit(1)
-  }
-  target = `${pathToFileURL(localProbe).href}?v=${Date.now()}`
-  fileMode = true
-  console.log(`check-panel: using the working tree over file:// (${error.message})`)
+// Always drive the working tree over file://.
+//
+// The probe writes the panel into a same-origin iframe with `document.write`. When that page is served
+// over HTTP the panel's percentage-height chain does not resolve inside the written document, so it
+// measures a content-sized panel and reports layout failures that the real ball does not have (the ball
+// loads the embedded panel at the top level of its own webview). Layout assertions therefore need the
+// deterministic file:// mode; `scripts/smoke-host.mjs` covers the HTTP surface instead.
+const target = `${pathToFileURL(localProbe).href}?v=${Date.now()}`
+const fileMode = true
+if (!existsSync(localProbe)) {
+  console.error(`check-panel: ${localProbe} is missing`)
+  process.exit(1)
 }
 
 let dom
