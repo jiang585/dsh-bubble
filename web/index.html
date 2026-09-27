@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DSH Bubble</title>
+    <!-- KaTeX is the same TeX engine the main DSH session uses, vendored so the ball needs no network. -->
+    <link rel="stylesheet" href="vendor/katex/katex.min.css">
+    <link rel="stylesheet" href="bubble.css">
+    <link rel="stylesheet" href="transcript.css">
+  </head>
+  <body>
+    <!-- 主悬浮面板 -->
+    <section id="panel" hidden>
+      <!-- 顶部控制条 (Header HUD) -->
+      <header id="panel-header">
+        <div class="header-left">
+          <button id="history" type="button" aria-pressed="false" class="icon-btn" title="会话历史">
+            <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="8" cy="8" r="6"></circle>
+              <polyline points="8 4.5 8 8 10.5 9.5"></polyline>
+            </svg>
+          </button>
+          <button id="new-conversation" type="button" class="icon-btn" title="新建会话">
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+              <line x1="8" y1="3" x2="8" y2="13"></line>
+              <line x1="3" y1="8" x2="13" y2="8"></line>
+            </svg>
+          </button>
+        </div>
+
+        <!-- 居中精美模型选择药丸 -->
+        <div class="header-center">
+          <button id="model" type="button" aria-haspopup="listbox" aria-expanded="false" title="点击选择模型">
+            <span class="model-sparkle">✦</span>
+            <span id="model-name-text">选择模型</span>
+            <svg class="chevron-icon" viewBox="0 0 12 12" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+              <path d="M3 4.5 6 7.5 9 4.5"></path>
+            </svg>
+          </button>
+        </div>
+
+        <!-- 右侧窗口与固定控制 -->
+        <div class="header-right">
+          <button id="pin-button" type="button" class="icon-btn" title="固定面板 (防止离开时自动收起)">
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9.5 2.5 13.5 6.5 11 9l1 4-4-1-2.5 2.5L2 14l-.5-3.5 2.5-2.5-1-4 4 1 2.5-2.5z"></path>
+            </svg>
+          </button>
+          <button id="close-panel-btn" type="button" class="icon-btn close-btn" title="收起面板">
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+              <line x1="4" y1="4" x2="12" y2="12"></line>
+              <line x1="12" y1="4" x2="4" y2="12"></line>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- 对话主视窗 -->
+      <div id="transcript" role="log" aria-live="polite"></div>
+
+      <!-- 优雅的浮层抽屉：模型选择器 -->
+      <div id="model-drawer" class="panel-drawer" hidden>
+        <div class="drawer-header">
+          <span class="drawer-title">切换 AI 模型</span>
+          <button id="close-model-drawer" type="button" class="drawer-close-btn" title="关闭">
+            <svg viewBox="0 0 14 14" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+              <line x1="3" y1="3" x2="11" y2="11"></line>
+              <line x1="11" y1="3" x2="3" y2="11"></line>
+            </svg>
+          </button>
+        </div>
+        <div id="model-list" role="listbox"></div>
+      </div>
+
+      <!-- 优雅的浮层抽屉：历史会话 -->
+      <div id="history-drawer" class="panel-drawer" hidden>
+        <div class="drawer-header">
+          <span class="drawer-title">历史会话</span>
+          <button id="close-history-drawer" type="button" class="drawer-close-btn" title="关闭">
+            <svg viewBox="0 0 14 14" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+              <line x1="3" y1="3" x2="11" y2="11"></line>
+              <line x1="11" y1="3" x2="3" y2="11"></line>
+            </svg>
+          </button>
+        </div>
+        <div id="history-list" role="listbox"></div>
+      </div>
+
+      <!-- 底部状态指示与 Token 用量 HUD -->
+      <div id="panel-hud">
+        <p id="status" role="status"></p>
+        <div id="usage-chip">
+          <span id="usage"></span>
+        </div>
+      </div>
+
+      <!-- 划词引用挂载条 -->
+      <div id="selection-chip" hidden>
+        <div class="chip-inner">
+          <span class="chip-icon">❝</span>
+          <span id="selection-chip-text"></span>
+        </div>
+        <button id="selection-chip-dismiss" type="button" title="移除引用">×</button>
+      </div>
+
+      <!-- 输入胶囊 -->
+      <form id="composer">
+        <label id="input-label" for="prompt">向悬浮球发送消息</label>
+        <div id="prompt" class="prompt-empty" role="textbox" aria-multiline="true" aria-labelledby="input-label" contenteditable="true" spellcheck="false"></div>
+        <button id="send-btn" type="submit" title="发送 (Enter)">
+          <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="8" y1="13" x2="8" y2="3"></line>
+            <polyline points="4 7 8 3 12 7"></polyline>
+          </svg>
+        </button>
+      </form>
+    </section>
+
+    <!-- 悬浮球本体 -->
+    <button id="ball" type="button" aria-label="DSH Bubble" title="点击展开/收起面板，按住可拖动">
+      <div class="ball-glow"></div>
+      <img id="ball-gif" src="assets/bubble.gif" alt="" draggable="false">
+    </button>
+
+    <!-- 边缘吸附指示器（贴边时仍保持微光圆润） -->
+    <button id="dock-tab" type="button" hidden aria-hidden="true" aria-label="展开悬浮球"></button>
+
+    <!-- 运行停止按钮 -->
+    <button id="stop" type="button" hidden aria-label="停止生成" title="停止生成">
+      <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor">
+        <rect x="4" y="4" width="8" height="8" rx="1.5"></rect>
+      </svg>
+    </button>
+
+    <script src="vendor/katex/katex.min.js"></script>
+    <script src="markdown.js"></script>
+    <script src="bubble.js"></script>
+  </body>
+</html>

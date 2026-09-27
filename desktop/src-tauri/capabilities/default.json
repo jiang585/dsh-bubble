@@ -1,0 +1,24 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capabilities for the DSH Bubble floating ball and selection toolbar windows.",
+  "windows": ["ball", "toolbar"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-set-position",
+    "core:window:allow-set-size",
+    "core:window:allow-set-always-on-top",
+    "core:window:allow-set-ignore-cursor-events",
+    "core:window:allow-inner-position",
+    "core:window:allow-outer-position",
+    "core:window:allow-outer-size",
+    "core:window:allow-scale-factor",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-close",
+    "core:window:allow-destroy",
+    "core:event:default",
+    "core:app:default"
+  ]
+}

@@ -1,0 +1,11 @@
+# DSH bundle patch: installs the floating ball into the profile that lists this package.
+- insert:
+    - id: dsh-bubble
+      name: 'dsh-bubble'
+      config:
+        basePath: /dsh-bubble
+        stateDir: ~/.dsh/dsh-bubble
+        workspaceName: dsh_bubble
+        frontPreset: standard
+        desktopExecutable: ''
+        autoStart: true

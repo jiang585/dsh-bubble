@@ -1,0 +1,16 @@
+# 构建产物
+desktop/src-tauri/target/
+desktop/dist/
+
+# 依赖与本地状态
+node_modules/
+*.log
+*.bak
+*.bak-*
+.cordis/
+
+# 编辑器与系统
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

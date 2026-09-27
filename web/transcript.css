@@ -1,0 +1,582 @@
+/* ==========================================================================
+   对白视窗 (Transcript Area) - Gemini Modern Fluid Typography
+   ========================================================================== */
+
+#transcript {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 10px 4px 8px;
+  font-size: 13px;
+  line-height: 1.6;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+#transcript::-webkit-scrollbar {
+  width: 5px;
+}
+
+#transcript::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+#transcript::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+}
+
+/* 消息行 */
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 100%;
+  animation: message-fade 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes message-fade {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* 用户气泡 (右对齐，轻奢质感) */
+.row-user {
+  align-items: flex-end;
+}
+
+.row-user .bubble {
+  background: var(--primary);
+  color: #ffffff;
+  border-radius: 16px 16px 4px 16px;
+  padding: 8px 12px;
+  max-width: 86%;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  box-shadow: 0 2px 8px var(--primary-glow);
+}
+
+/* Assistant 气泡 (左对齐，自然通透) */
+.row-assistant {
+  align-items: flex-start;
+}
+
+.row-assistant .bubble {
+  color: var(--text-main);
+  max-width: 100%;
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.row-assistant .bubble p {
+  margin: 0 0 8px;
+}
+
+.row-assistant .bubble p:last-child {
+  margin-bottom: 0;
+}
+
+.row-assistant .bubble strong {
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+/* Markdown 代码块 (科技深邃) */
+.row-assistant .bubble pre {
+  margin: 8px 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.95);
+  color: #f8fafc;
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, "Cascadia Code", Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.row-assistant .bubble code {
+  font-family: ui-monospace, SFMono-Regular, "Cascadia Code", Menlo, monospace;
+  font-size: 11.5px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--bg-card);
+  color: var(--primary);
+}
+
+.row-assistant .bubble pre code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+}
+
+.row-assistant .bubble ul,
+.row-assistant .bubble ol {
+  margin: 6px 0;
+  padding-left: 18px;
+}
+
+.row-assistant .bubble li {
+  margin-bottom: 3px;
+}
+
+/* 工具调用卡片 (Tool Card) */
+.row-tool {
+  font-size: 11.5px;
+  margin: 2px 0;
+}
+
+.row-tool .tool-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  border-radius: 8px;
+  padding: 4px 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  transition: all 140ms ease;
+  max-width: 90%;
+}
+
+.row-tool .tool-head:hover {
+  background: var(--bg-card-hover);
+  color: var(--text-main);
+  border-color: var(--border-strong);
+}
+
+.row-tool .tool-name {
+  font-family: ui-monospace, Menlo, monospace;
+  font-weight: 600;
+  color: var(--primary);
+}
+
+.row-tool .tool-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-tool .tool-body {
+  display: none;
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--bg-card);
+  color: var(--text-muted);
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  border: 1px solid var(--border);
+}
+
+.row-tool.open .tool-body {
+  display: block;
+}
+
+/* 系统通知卡片 */
+.row-notice .bubble {
+  border-left: 3px solid var(--primary);
+  background: var(--bg-card);
+  padding: 8px 10px;
+  border-radius: 4px 10px 10px 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.row-error .bubble {
+  color: var(--error);
+  background: rgba(239, 68, 68, 0.08);
+  border-left: 3px solid var(--error);
+  padding: 6px 10px;
+  border-radius: 4px 8px 8px 4px;
+  font-size: 12px;
+}
+
+/* ==========================================================================
+   富文本渲染 (GFM + KaTeX) - 对齐 DSH 本体会话的阅读体验
+   ========================================================================== */
+
+.row-assistant .bubble h1,
+.row-assistant .bubble h2,
+.row-assistant .bubble h3,
+.row-assistant .bubble h4,
+.row-assistant .bubble h5,
+.row-assistant .bubble h6 {
+  margin: 12px 0 6px;
+  line-height: 1.35;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.row-assistant .bubble h1 { font-size: 16px; }
+.row-assistant .bubble h2 { font-size: 15px; }
+.row-assistant .bubble h3 { font-size: 14px; }
+.row-assistant .bubble h4,
+.row-assistant .bubble h5,
+.row-assistant .bubble h6 { font-size: 13px; color: var(--text-muted); }
+
+.row-assistant .bubble h1:first-child,
+.row-assistant .bubble h2:first-child,
+.row-assistant .bubble h3:first-child { margin-top: 0; }
+
+.row-assistant .bubble hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 12px 0;
+}
+
+.row-assistant .bubble del {
+  color: var(--text-light);
+}
+
+.row-assistant .bubble a {
+  color: var(--primary);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--primary) 35%, transparent);
+  cursor: pointer;
+}
+
+.row-assistant .bubble a:hover {
+  border-bottom-color: var(--primary);
+}
+
+.row-assistant .bubble img {
+  max-width: 100%;
+  border-radius: 10px;
+  display: block;
+  margin: 6px 0;
+}
+
+/* 引用块 */
+.row-assistant .bubble blockquote {
+  margin: 8px 0;
+  padding: 6px 12px;
+  border-left: 3px solid var(--primary);
+  background: var(--bg-card);
+  border-radius: 4px 10px 10px 4px;
+  color: var(--text-muted);
+}
+
+.row-assistant .bubble blockquote p {
+  margin: 0 0 4px;
+}
+
+.row-assistant .bubble blockquote p:last-child {
+  margin-bottom: 0;
+}
+
+/* 列表 */
+.row-assistant .bubble li {
+  margin-bottom: 3px;
+}
+
+.row-assistant .bubble li.task-item {
+  list-style: none;
+  margin-left: -18px;
+}
+
+.row-assistant .bubble input[type="checkbox"] {
+  accent-color: var(--primary);
+  margin-right: 4px;
+  vertical-align: -1px;
+}
+
+/* 表格 */
+.table-wrap {
+  margin: 8px 0;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  scrollbar-width: thin;
+}
+
+.row-assistant .bubble table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+}
+
+.row-assistant .bubble th,
+.row-assistant .bubble td {
+  padding: 6px 9px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+.row-assistant .bubble thead th {
+  background: var(--bg-card);
+  font-weight: 600;
+  color: var(--text-main);
+  white-space: nowrap;
+}
+
+.row-assistant .bubble tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* 代码块：语言标签 + 复制按钮 */
+.row-assistant .bubble .code-block {
+  position: relative;
+  margin: 8px 0;
+}
+
+.row-assistant .bubble .code-block pre {
+  margin: 0;
+  padding: 24px 12px 10px;
+}
+
+.code-lang {
+  position: absolute;
+  top: 7px;
+  left: 12px;
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: rgba(248, 250, 252, 0.55);
+  pointer-events: none;
+  font-family: ui-monospace, Menlo, monospace;
+}
+
+.code-copy {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  border: 0;
+  border-radius: 6px;
+  padding: 2px 7px;
+  font: inherit;
+  font-size: 10.5px;
+  color: rgba(248, 250, 252, 0.72);
+  background: rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  transition: all 140ms ease;
+}
+
+.code-copy:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* 数学公式 */
+.row-assistant .bubble .math-display {
+  margin: 10px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
+  scrollbar-width: thin;
+}
+
+.row-assistant .bubble .katex {
+  font-size: 1.02em;
+}
+
+.row-assistant .bubble .katex-display {
+  margin: 8px 0;
+}
+
+.row-assistant .bubble code.math-raw {
+  color: var(--primary);
+  background: var(--bg-card);
+}
+
+/* 优雅脉冲光标 */
+.cursor::after {
+  content: " ";
+  display: inline-block;
+  width: 2px;
+  height: 13px;
+  background: var(--primary);
+  margin-left: 2px;
+  vertical-align: -1px;
+  border-radius: 1px;
+  animation: pulse-cursor 0.8s infinite alternate ease-in-out;
+}
+
+@keyframes pulse-cursor {
+  from { opacity: 0.15; transform: scaleY(0.8); }
+  to { opacity: 1; transform: scaleY(1); }
+}
+
+.transcript-empty {
+  color: var(--text-light);
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: center;
+  padding: 36px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.transcript-empty::before {
+  content: "✨";
+  font-size: 20px;
+}
+
+/* ==========================================================================
+   模型与历史抽屉项样式 (Drawer Card Items)
+   ========================================================================== */
+
+/* 模型分组标题 */
+.model-group {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-light);
+  padding: 8px 6px 2px;
+  letter-spacing: 0.6px;
+}
+
+/* 模型卡片 */
+.model-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px 12px;
+  text-align: left;
+  font: inherit;
+  color: var(--text-main);
+  background: var(--bg-card);
+  cursor: pointer;
+  transition: all 140ms ease;
+  position: relative;
+}
+
+.model-row:hover {
+  border-color: var(--primary);
+  background: var(--bg-card-hover);
+  transform: translateY(-1px);
+}
+
+.model-row.current {
+  border-color: var(--primary);
+  background: var(--bg-active);
+  box-shadow: 0 0 0 1px var(--primary);
+}
+
+.model-row.current::after {
+  content: "✓";
+  position: absolute;
+  top: 9px;
+  right: 12px;
+  color: var(--primary);
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.model-name-title {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.model-note {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.35;
+}
+
+/* 推理强度 (Reasoning Effort) 胶囊排布 */
+.effort-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 8px;
+}
+
+.effort-title {
+  font-size: 10.5px;
+  color: var(--text-light);
+}
+
+.effort-btn {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: var(--bg-card);
+  cursor: pointer;
+  transition: all 120ms ease;
+}
+
+.effort-btn:hover {
+  border-color: var(--primary);
+  color: var(--text-main);
+}
+
+.effort-btn.current {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #ffffff;
+  box-shadow: 0 1px 4px var(--primary-glow);
+}
+
+/* 历史会话卡片 */
+.history-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  text-align: left;
+  font: inherit;
+  color: var(--text-main);
+  background: var(--bg-card);
+  cursor: pointer;
+  transition: all 140ms ease;
+}
+
+.history-row:hover {
+  border-color: var(--primary);
+  background: var(--bg-card-hover);
+  transform: translateY(-1px);
+}
+
+.history-row.current {
+  border-color: var(--primary);
+  background: var(--bg-active);
+  font-weight: 600;
+  box-shadow: 0 0 0 1px var(--primary);
+}
+
+.history-title {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+
+.history-empty {
+  text-align: center;
+  color: var(--text-light);
+  font-size: 12px;
+  padding: 32px 16px;
+}

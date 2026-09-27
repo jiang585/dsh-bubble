@@ -1,0 +1,32 @@
+[package]
+name = "dsh-bubble-shell"
+version = "0.1.0"
+description = "DSH Bubble floating ball window (Tauri shell for the dsh-bubble plugin)"
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+tauri = { version = "2.11.5", features = ["tray-icon", "image-png"] }
+tauri-plugin-single-instance = "2.4.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_Com",
+  "Win32_UI_Accessibility",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
+# The `#[implement]` macro expands to paths rooted at this crate name, so it must be a direct
+# dependency; it is the same version the `windows` crate already builds against.
+windows-core = "0.62"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

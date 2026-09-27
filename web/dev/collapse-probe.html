@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="UTF-8">
+    <title>Bubble collapse probe</title>
+  </head>
+  <body>
+    <!--
+      Regression probe for the panel's auto-collapse rules.
+
+      Loads the real panel page into a same-origin iframe, expands it through the real ball click
+      handler, then moves the pointer out of the window twice: once with the composer focused (must
+      stay open) and once with nothing focused (must collapse). `scripts/check-collapse.mjs` drives
+      this page through headless Chromium and reads data-result from the dumped DOM.
+    -->
+    <div id="out" data-result="pending">running…</div>
+    <iframe id="frame" width="520" height="620" style="border:1px solid #ccc"></iframe>
+    <script>
+      const out = document.getElementById('out')
+      const log = []
+      const say = (line) => { log.push(line); out.textContent = log.join('\n') }
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+      /** Write the panel page into the iframe with a shim, so nothing depends on a sandboxed frame. */
+      async function mountPanel(frame) {
+        const html = await (await fetch('../index.html')).text()
+        const shim = '<base href="../"><script>'
+          + 'Element.prototype.setPointerCapture = function () {};'
+          + 'Element.prototype.releasePointerCapture = function () {};'
+          + '<\/script>'
+        const doc = frame.contentDocument
+        doc.open()
+        doc.write(html.replace('<head>', `<head>${shim}`))
+        doc.close()
+        return doc
+      }
+
+      /** Fire a synthetic pointer event on a target inside the panel document. */
+      function pointer(win, target, type, x, y) {
+        target.dispatchEvent(new win.PointerEvent(type, {
+          bubbles: true, cancelable: true, composed: true,
+          button: 0, buttons: type === 'pointerdown' ? 1 : 0, pointerId: 1,
+          clientX: x, clientY: y, screenX: x, screenY: y,
+        }))
+      }
+
+      async function main() {
+        const frame = document.getElementById('frame')
+        const doc = await mountPanel(frame)
+        await sleep(600)
+        const win = frame.contentWindow
+        const expanded = () => doc.body.classList.contains('expanded')
+        const panel = doc.getElementById('panel')
+        const ball = doc.getElementById('ball')
+        const prompt = doc.getElementById('prompt')
+
+        // Expand through the real handler: a click on the ball toggles the panel open.
+        pointer(win, ball, 'pointerdown', 40, 40)
+        pointer(win, ball, 'pointerup', 40, 40)
+        await sleep(400)
+        say(`expanded after ball click = ${expanded()}`)
+        if (!expanded()) { out.dataset.result = 'fail'; say('FAIL: the panel never opened'); return }
+
+        // Auto-collapse only exists while the panel is unpinned, so unpin through its own button.
+        const pinButton = doc.getElementById('pin-button')
+        if (doc.body.classList.contains('pinned')) pinButton.click()
+        await sleep(120)
+        const unpinned = !doc.body.classList.contains('pinned')
+        say(`unpinned = ${unpinned}`)
+        if (!unpinned) { out.dataset.result = 'fail'; say('FAIL: could not unpin the panel'); return }
+
+        // Headless frames do not hold real OS focus, so the window's focus state is shadowed here:
+        // case A models a focused window, case B models switching to another app.
+        let windowFocused = true
+        Object.defineProperty(doc, 'hasFocus', { configurable: true, value: () => windowFocused })
+
+        // Case A: window focused and the composer holds focus, pointer leaves -> stay open.
+        prompt.focus()
+        say(`composer focused = ${doc.activeElement === prompt}`)
+        panel.dispatchEvent(new win.PointerEvent('pointerleave', { bubbles: false }))
+        doc.dispatchEvent(new win.PointerEvent('pointerleave', { bubbles: false }))
+        await sleep(1400)
+        const stayedOpen = expanded()
+        say(`with focus held open = ${stayedOpen}`)
+
+        // Case B: the user switches to another app. Chromium keeps activeElement on the composer, so
+        // only the window's own focus state can tell that the caret has gone.
+        windowFocused = false
+        win.dispatchEvent(new win.Event('blur'))
+        say(`composer still active after window blur = ${doc.activeElement === prompt}`)
+        await sleep(1400)
+        const collapsed = !expanded()
+        say(`after window blur collapsed = ${collapsed}`)
+        say(`diagnostics: running=${doc.body.classList.contains('running')} `
+          + `pinned=${doc.body.classList.contains('pinned')} `
+          + `active=${doc.activeElement === null ? 'null' : doc.activeElement.tagName} `
+          + `panelHidden=${panel.hidden} `
+          + `chipHidden=${doc.getElementById('selection-chip').hidden}`)
+
+        out.dataset.result = stayedOpen && collapsed ? 'pass' : 'fail'
+        say(`result = ${out.dataset.result}`)
+      }
+
+      main().catch((error) => {
+        out.dataset.result = 'fail'
+        say(`FAIL: ${String(error && error.message ? error.message : error)}`)
+      })
+    </script>
+  </body>
+</html>
