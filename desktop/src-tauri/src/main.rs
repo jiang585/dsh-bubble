@@ -441,6 +441,16 @@ fn bubble_open_url(url: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Record the panel build the webview reports at startup.
+///
+/// The panel is embedded in this executable, so a stale shell silently serves an old UI while every
+/// file on disk still looks current. Writing the revision into the log makes that visible after the
+/// fact, which is how a stale panel was found once already.
+#[tauri::command]
+fn bubble_panel_ready(revision: String) {
+    crate::log::line(&format!("panel: revision {revision}"));
+}
+
 /// Id of the process that started this shell, which is the DSH host.
 fn parent_process_id() -> Option<u32> {
     use windows::Win32::Foundation::CloseHandle;
@@ -713,6 +723,7 @@ fn main() {
             bubble_open_url,
             bubble_hide_toolbar,
             bubble_focus_main,
+            bubble_panel_ready,
         ])
         .setup(|app| {
             let handle = app.handle().clone();

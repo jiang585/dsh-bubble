@@ -15,6 +15,16 @@
   /** Row id the host uses for live assistant text that has not reached the session log yet. */
   const STREAM_ID = 'bubble-stream'
 
+  /**
+   * Panel build stamp.
+   *
+   * `tauri.conf.json` embeds this file into the shell executable, so "the file on disk is current" says
+   * nothing about the panel a running ball serves. Bump this whenever the panel changes: the shell
+   * writes it to `~/.dsh/dsh-bubble/shell.log` at startup, which is the only reliable way to tell which
+   * build a running ball actually loaded.
+   */
+  const PANEL_REVISION = '2026-09-27.2-question-card'
+
   const tauri = window.__TAURI__
   const invoke = tauri?.core?.invoke
   const listen = tauri?.event?.listen
@@ -1174,6 +1184,9 @@
 
   async function loadEnvironment() {
     if (inDesktop) {
+      // Record which panel build this shell is running; the executable embeds the panel, so this is
+      // the only way to tell a current ball from one carrying a stale UI.
+      void shell('bubble_panel_ready', { revision: PANEL_REVISION })
       const env = await shell('bubble_environment')
       if (env !== undefined && env !== null) {
         environment = {
