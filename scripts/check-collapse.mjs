@@ -50,7 +50,8 @@ const target = `${pathToFileURL(localProbe).href}?v=${Date.now()}`
 const fileMode = true
 
 let dom
-const profile = `${process.env.TEMP ?? '.'}\\bubble-collapse-probe`
+// Unique per run: see the same note in `check-panel.mjs` about reusing a browser profile.
+const profile = `${process.env.TEMP ?? '.'}\\bubble-collapse-probe-${process.pid}-${Date.now()}`
 rmSync(profile, { recursive: true, force: true })
 try {
   dom = execFileSync(browser, [

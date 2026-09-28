@@ -202,9 +202,37 @@ fn work_area_for(app: &AppHandle, point: Point) -> Rect {
     nearest.map(|(rect, _)| rect).unwrap_or(fallback)
 }
 
+/// Move and resize the window in a single Win32 call.
+///
+/// `set_size` followed by `set_position` is two window operations. Between them the window is composited
+/// at its old origin with its new size, which the user sees as a flash of misplaced content on every
+/// expand and collapse. `SetWindowPos` applies position and size together, so that frame never exists.
 fn apply_rect(window: &WebviewWindow, rect: Rect) {
-    let _ = window.set_size(LogicalSize::new(rect.width as f64, rect.height as f64));
-    let _ = window.set_position(LogicalPosition::new(rect.x as f64, rect.y as f64));
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
+
+    let Ok(handle) = window.hwnd() else {
+        // No handle (a platform without one): keep the two-call path rather than doing nothing.
+        let _ = window.set_size(LogicalSize::new(rect.width as f64, rect.height as f64));
+        let _ = window.set_position(LogicalPosition::new(rect.x as f64, rect.y as f64));
+        return;
+    };
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let x = (rect.x as f64 * scale).round() as i32;
+    let y = (rect.y as f64 * scale).round() as i32;
+    let width = (rect.width as f64 * scale).round() as i32;
+    let height = (rect.height as f64 * scale).round() as i32;
+    unsafe {
+        let _ = SetWindowPos(
+            HWND(handle.0 as *mut core::ffi::c_void),
+            None,
+            x,
+            y,
+            width,
+            height,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+    }
 }
 
 fn publish(window: &WebviewWindow, state: &BubbleState) -> BubbleSnapshot {

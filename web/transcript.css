@@ -2,6 +2,17 @@
    新消息提示 / 待发送回显 / 提问卡片
    ========================================================================== */
 
+/* 几何变更期间锁住画面。
+   球的默认位置是窗口左上角（#ball 的 top/left），停靠角由 body.expand-* 决定，而那些类是在
+   窗口改变尺寸之后才写上的。中间那几帧就是"大窗口 + 球还在左上角"，用户看到球闪一下再回到
+   正确位置。窗口背景本身是全透明的，所以这几帧整体隐藏 = 什么都看不到，比任何错位都好。
+   必须无过渡地立即生效，否则隐藏本身也成了动画。 */
+body.layout-change #ball,
+body.layout-change #panel {
+  visibility: hidden !important;
+  transition: none !important;
+}
+
 #jump-latest {
   position: absolute;
   left: 50%;

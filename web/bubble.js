@@ -23,7 +23,7 @@
    * writes it to `~/.dsh/dsh-bubble/shell.log` at startup, which is the only reliable way to tell which
    * build a running ball actually loaded.
    */
-  const PANEL_REVISION = '2026-09-27.4-question-fit'
+  const PANEL_REVISION = '2026-09-28.2-no-flash'
 
   const tauri = window.__TAURI__
   const invoke = tauri?.core?.invoke
@@ -364,6 +364,29 @@
     }, 500)
   }
 
+  /**
+   * Apply new window geometry with the ball and panel hidden.
+   *
+   * The ball's resting place is the window's top-left corner and the docked corner only follows the
+   * `body.expand-*` classes, which the shell's snapshot supplies. The window therefore resizes before
+   * those classes change, and without this lock the frames in between show a big window with the ball
+   * still in the top-left corner: the flash users see on every expand. The window background is fully
+   * transparent, so hiding for those frames is invisible, while any misplaced frame is not.
+   *
+   * @param expanded - Target state to ask the shell for.
+   * @returns The shell's geometry snapshot, or undefined when the shell did not answer.
+   */
+  async function applyGeometry(expanded) {
+    document.body.classList.add('layout-change')
+    // Force a style flush so the hiding frame exists before the window changes size.
+    void document.body.offsetHeight
+    try {
+      return await shell('bubble_set_expanded', { expanded })
+    } finally {
+      document.body.classList.remove('layout-change')
+    }
+  }
+
   async function setExpanded(next, force = false) {
     if (collapseTimer !== undefined) {
       clearTimeout(collapseTimer)
@@ -374,7 +397,8 @@
       collapseFrame = undefined
     }
     if (next) {
-      applyWindowState(await shell('bubble_set_expanded', { expanded: true }))
+      const geometry = await applyGeometry(true)
+      applyWindowState(geometry)
       panel.hidden = false
       expanded = true
       document.body.classList.add('expanded')
@@ -390,13 +414,15 @@
     stop.hidden = true
     if (force) {
       panel.hidden = true
-      applyWindowState(await shell('bubble_set_expanded', { expanded: false }))
+      applyWindowState(await applyGeometry(false))
       return
     }
-    collapseFrame = setTimeout(() => {
+    collapseFrame = setTimeout(async () => {
       collapseFrame = undefined
       panel.hidden = true
-      void shell('bubble_set_expanded', { expanded: false }).then(applyWindowState)
+      // The class flip above already ran the exit animation; the window shrink happens now, so the
+      // ball keeps its docked corner until the geometry is final.
+      applyWindowState(await applyGeometry(false))
     }, ANIMATION_MS)
   }
 
@@ -1105,8 +1131,20 @@
 
   // ---------------------------------------------------------------- input
 
+  /**
+   * The composer's current text.
+   *
+   * `innerText` mirrors the visual line breaks of the contenteditable, but it is layout-dependent: while
+   * the panel is hidden — the frames covering a window geometry change — it can read as empty, which
+   * would silently drop what the user typed. Fall back to `textContent` when the rendered text is empty
+   * but the source is not.
+   *
+   * @returns The prompt text without the trailing newline a contenteditable leaves behind.
+   */
   function promptText() {
-    return prompt.innerText.replace(/\n$/u, '')
+    const rendered = prompt.innerText
+    const source = prompt.textContent ?? ''
+    return (rendered === '' ? source : rendered).replace(/\n$/u, '')
   }
 
   function syncPromptState() {
@@ -1264,6 +1302,10 @@
 
     await loadEnvironment()
     applyWindowState(windowState)
+    // The window has its final geometry and docking corner now, so the first visible frame is correct.
+    // The timeout is a safety net: a shell that never answers must not leave the ball invisible.
+    document.body.classList.remove('layout-change')
+    setTimeout(() => document.body.classList.remove('layout-change'), 800)
 
     try {
       const state = await request('/state')

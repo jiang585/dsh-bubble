@@ -96,17 +96,23 @@ same engine the main dsh session uses — is vendored with its fonts, so math wo
 coalesced with `requestAnimationFrame`, the live bubble survives transcript rebuilds, the run settles only once
 the committed message arrives, and reasoning folds into a "thinking…" block.
 
-**8. Three panel defects reported by a user, each fixed with a regression test.**
+**8. Panel defects reported by users, each fixed with a regression test.**
 
 | Symptom | Root cause | Fix |
 |---|---|---|
 | A newly arrived message did not scroll into view | When the live streaming bubble was still present, the transcript rebuild took the "gentle follow" branch — so a new message arrived **without** moving the viewport | Force-follow when the durable tail changed; streaming deltas still only follow when the reader is already at the bottom, plus a "↓ new message" button when they are not |
 | Prompts sent while the agent was busy were invisible | The host **queues** such prompts, and a queued prompt is not a durable event, so the panel had nothing to render | The panel echoes the prompt as "sent, waiting for the agent" and retires the echo once the session log carries it |
-| Questions from the agent were neither visible nor answerable | The upstream ball had question cards and the renderer rewrite dropped them; and `ctx.userQuestions` is a **single-provider** service owned by the DSH window | Detect a pending `ask_user_question` from `tool/call`, render the question and its options in the panel, and offer a one-click jump to the window that can answer (new `bubble_focus_main`: locate the DSH window through the parent process and activate it) |
+| Questions from the agent were neither visible nor answerable | The upstream ball had question cards and the renderer rewrite dropped them; and `ctx.userQuestions` is a **single-provider** service owned by the DSH window | Detect a pending `ask_user_question` from `tool/call`, render the question and its options in the panel, and offer a one-click jump to the window that can answer (`bubble_focus_main`: locate the DSH window by application executable, then beat the Windows foreground lock with `AttachThreadInput`) |
+| A long question pushed the "answer in the main window" button out of the panel | The panel is only 344×444 and the card grew with its content | The card is now a height-capped flex column: header and button stay put, only the question list scrolls |
+| **Expanding or collapsing flashed the ball in the top-left corner** | The ball's base position *is* the window's top-left, and its docked corner only comes from the `body.expand-*` classes applied **after** the window resizes — so the frames in between showed a big window with the ball still in the corner | The ball and panel are hidden for exactly those frames (the window background is fully transparent, so nothing is visible instead of something misplaced), and the two Win32 calls behind `set_size` + `set_position` collapsed into a **single `SetWindowPos`**, removing the "old position, new size" frame at the source |
+| Pressing Enter during those frames silently dropped the message | `promptText()` read the composer with `innerText`, which is **layout-dependent** and reads as empty while the panel is hidden | Fall back to `textContent` when the rendered text is empty but the source is not |
 
-This also fixed an unreported defect: **Chromium throttles `requestAnimationFrame` while the panel is collapsed**,
-so streamed answers were not rendered — and the ball is collapsed most of the time. Scheduling now runs on the
-next paint *or* 48 ms, whichever comes first.
+Two further defects fixed along the way, neither of them reported:
+
+- **Chromium throttles `requestAnimationFrame` while the panel is collapsed**, so streamed answers were not
+  rendered — and the ball is collapsed most of the time. Scheduling now runs on the next paint *or* 48 ms.
+- **The first frame had no geometry yet**, so the ball flashed in the top-left on startup too. `<body>` now
+  carries `layout-change` from the start and is revealed once the shell answers with the real geometry.
 
 **9. Panel auto-collapse rules.** Pinned, running, dragging, a quoted selection, an open drawer, **focus inside
 the panel**, or **the pointer inside the panel** all hold it open. The focus check must also consult the
@@ -118,16 +124,22 @@ exceptions, the selection timeline, and toolbar visibility. Six re-runnable chec
 
 ```
 node scripts/check-host.mjs       # host modules load
-node scripts/smoke-host.mjs       # full host HTTP surface + streaming deltas + pending-question detection
+node scripts/smoke-host.mjs       # host HTTP surface: deltas, pending questions, static assets + content types
 node scripts/check-markdown.mjs   # renderer as a pure function (52 assertions, incl. XSS cases)
 node scripts/check-render.mjs     # real headless Chromium with real KaTeX, asserting the DOM (22 assertions)
 node scripts/check-collapse.mjs   # panel collapse behaviour, driving the real panel headlessly (works offline)
-node scripts/check-panel.mjs      # new-message follow, queued echo, question card (16 assertions)
+node scripts/check-panel.mjs      # 34 assertions: new-message follow, queued echo, question card,
+                                  #   long-question layout, and no misplaced frame during geometry changes
 ```
 
 `check-collapse` was **mutation-tested**: removing the focus guard fails case 1; removing the window-focus
-guard fails case 2. `check-panel` likewise caught two real bugs while it was being written (no jump on a new
-message, and unthrottled-render failure) rather than passing from the start.
+guard fails case 2. `check-panel` is no decoration either — it caught three real bugs while it was being
+written (no jump on a new message, unthrottled render, and `innerText` reading empty during a geometry change
+so the typed message was dropped); the last one surfaced as its own flakiness before it was understood.
+
+Every probe also asserts that it is testing the **working tree**: if the plugin's HTTP copy serves an older
+probe, or the executable embeds a panel older than `web/`, the check says so instead of reporting a result.
+That class of "tested stale code" mistake happened twice in this project, which is why the guards exist.
 
 ## Install
 

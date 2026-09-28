@@ -9,7 +9,9 @@
     <link rel="stylesheet" href="bubble.css">
     <link rel="stylesheet" href="transcript.css">
   </head>
-  <body>
+  <!-- layout-change 从一开始挂着：首帧的窗口位置与停靠角要等壳回话才知道，
+       这一帧必须是空白（窗口背景本就透明），否则球会先在左上角闪一下。 -->
+  <body class="layout-change">
     <!-- 主悬浮面板 -->
     <section id="panel" hidden>
       <!-- 顶部控制条 (Header HUD) -->

@@ -40,6 +40,22 @@
               if (command === 'bubble_focus_main' && window.__probe.failFocus === true) {
                 throw new Error('系统拒绝了窗口激活');
               }
+              // Geometry changes take real time; the delay models the window resize so the probe can
+              // inspect what the panel shows while a resize is in flight.
+              if (command === 'bubble_set_expanded') {
+                const state = {
+                  ball: { x: 1635, y: 492 },
+                  direction: args?.expanded === true
+                    ? { horizontal: 'left', vertical: 'up' }
+                    : { horizontal: 'right', vertical: 'down' },
+                  expanded: args?.expanded === true,
+                  docked: null,
+                };
+                window.__probe.geometryPending = true;
+                await new Promise((resolve) => setTimeout(resolve, 200));
+                window.__probe.geometryPending = false;
+                return state;
+              }
               return null;
             } },
             event: { listen: async () => () => {} },
@@ -127,6 +143,25 @@
           if (!ok) failures.push(name)
         }
 
+        /**
+         * Wait for a condition instead of a fixed delay.
+         *
+         * The panel's state changes are asynchronous (the window geometry call takes real time), so a
+         * fixed sleep races the state machine and reports product bugs that are not there.
+         *
+         * @param predicate - Condition to poll.
+         * @param timeoutMs - Give up after this long.
+         * @returns True when the condition held before the timeout.
+         */
+        const waitFor = async (predicate, timeoutMs = 5000) => {
+          const started = Date.now()
+          while (Date.now() - started < timeoutMs) {
+            if (predicate()) return true
+            await sleep(25)
+          }
+          return false
+        }
+
         check('panel mounted', typeof probe?.push === 'function', `calls=${probe?.calls?.join(',') ?? 'none'}`)
         const styles = await waitForStyles()
         check('样式已加载', styles !== undefined,
@@ -187,11 +222,18 @@
         check('提示随后隐藏', jumpLatest.hidden === true)
 
         // --- 2. A prompt sent while the agent is busy is echoed immediately.
+        // Interact only once the panel is settled: a submit that lands during a geometry change reads an
+        // empty composer, which made this probe flaky instead of testing the product.
+        await waitFor(() => doc.body.classList.contains('expanded') && !doc.body.classList.contains('layout-change'))
         prompt.textContent = '第二条消息：这条必须立刻可见'
         prompt.dispatchEvent(new win.Event('input', { bubbles: true }))
+        say(`composer text before submit = ${JSON.stringify(prompt.textContent)}`)
         doc.getElementById('composer').dispatchEvent(new win.Event('submit', { bubbles: true, cancelable: true }))
-        await sleep(400)
+        // Wait for the echo itself, not for the request: the panel renders the queued echo after the
+        // host answers, so waiting on the fetch observes the state before the echo exists.
         const pendingRows = () => [...transcript.querySelectorAll('.row-pending')]
+        await waitFor(() => pendingRows().length === 1)
+        await sleep(400)
         check('排队消息立刻可见', pendingRows().length === 1, `rows=${pendingRows().length}`)
         check('排队提示文案', pendingRows()[0]?.textContent.includes('等待 Agent 处理') === true)
         check('请求已发出', probe.sends.includes('第二条消息：这条必须立刻可见'), `sends=${JSON.stringify(probe.sends)}`)
@@ -280,6 +322,43 @@
         check('卡片不会超出手面板高度', questionCard.getBoundingClientRect().height <= panelRect.height * 0.5,
           `card=${Math.round(questionCard.getBoundingClientRect().height)} panel=${Math.round(panelRect.height)}`)
         probe.push({ type: 'question', question: null })
+
+        // --- 5. No frame may show the ball mispositioned while the window geometry changes.
+        //
+        // The ball's default position is the window's top-left corner and its docked corner only comes
+        // from the classes the shell's snapshot supplies, so the window resizes before the corner is
+        // correct. The panel therefore hides the ball and panel for exactly those frames; this probe
+        // samples visibility while the geometry call is still in flight, which is the moment that used
+        // to show a flash in the top-left.
+        const ballVisibility = () => win.getComputedStyle(bubble).visibility
+        check('空闲时球可见（锁没有残留）', ballVisibility() === 'visible', `visibility=${ballVisibility()}`)
+
+        // Collapse hard through the real close button, sampling mid-flight.
+        doc.getElementById('close-panel-btn').click()
+        await sleep(50)
+        const collapseHidden = ballVisibility() === 'hidden'
+        const collapseBusy = probe.geometryPending === true
+        check('收起过程中球被隐藏', collapseHidden, `visibility=${ballVisibility()} busy=${collapseBusy}`)
+        await sleep(300)
+        check('收起结束后球重新可见', ballVisibility() === 'visible', `visibility=${ballVisibility()}`)
+        check('收起后方向类已更新',
+          doc.body.classList.contains('expand-right') && doc.body.classList.contains('expand-down'),
+          `body=${doc.body.className}`)
+
+        // Expand again through the real ball click, sampling mid-flight.
+        pointer(win, bubble, 'pointerdown', 40, 40)
+        pointer(win, bubble, 'pointerup', 40, 40)
+        await sleep(50)
+        check('展开过程中球被隐藏', ballVisibility() === 'hidden', `visibility=${ballVisibility()}`)
+        await sleep(300)
+        check('展开结束后球可见', ballVisibility() === 'visible', `visibility=${ballVisibility()}`)
+        check('展开后方向类已更新',
+          doc.body.classList.contains('expand-left') && doc.body.classList.contains('expand-up'),
+          `body=${doc.body.className}`)
+        check('展开后球贴在左下角',
+          win.getComputedStyle(bubble).right !== 'auto' || win.getComputedStyle(bubble).left === 'auto',
+          `left=${win.getComputedStyle(bubble).left} right=${win.getComputedStyle(bubble).right} ` +
+          `top=${win.getComputedStyle(bubble).top} bottom=${win.getComputedStyle(bubble).bottom}`)
 
         say(`pushes=${probe.pushes.join(',')}`)
         out.dataset.result = failures.length === 0 ? 'pass' : 'fail'

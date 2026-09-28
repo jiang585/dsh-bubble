@@ -52,7 +52,10 @@ if (!existsSync(localProbe)) {
 }
 
 let dom
-const profile = `${process.env.TEMP ?? '.'}\\bubble-panel-probe`
+// A profile directory unique to this run: three runs a second apart reused one directory while the
+// previous browser was still exiting, and the reused session produced stale page state (the composer
+// silently stopped sending), which looked like a product bug.
+const profile = `${process.env.TEMP ?? '.'}\\bubble-panel-probe-${process.pid}-${Date.now()}`
 rmSync(profile, { recursive: true, force: true })
 try {
   dom = execFileSync(browser, [
