@@ -233,6 +233,45 @@ fn apply_rect(window: &WebviewWindow, rect: Rect) {
             SWP_NOZORDER | SWP_NOACTIVATE,
         );
     }
+    crate::log::line(&format!("geometry: apply {x},{y} {width}x{height} (scale {scale})"));
+    sample_geometry(HWND(handle.0 as *mut core::ffi::c_void));
+}
+
+/// Sample the window rectangle for a short window after a geometry change.
+///
+/// A flash of misplaced content is a frame that exists for tens of milliseconds. Sampling the real
+/// rectangle at ~8 ms resolution right after the change is what actually proves whether such a frame
+/// happens, instead of reasoning about what the compositor should have done.
+fn sample_geometry(window: windows::Win32::Foundation::HWND) {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
+
+    let handle = window.0 as isize;
+    std::thread::spawn(move || {
+        let window = windows::Win32::Foundation::HWND(handle as *mut core::ffi::c_void);
+        let mut previous = (i32::MIN, i32::MIN, i32::MIN, i32::MIN);
+        for index in 0..100 {
+            let mut rect = RECT::default();
+            let ok = unsafe { GetWindowRect(window, &mut rect) }.is_ok();
+            let current = if ok {
+                (rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top)
+            } else {
+                (i32::MIN, i32::MIN, i32::MIN, i32::MIN)
+            };
+            if current != previous {
+                crate::log::line(&format!(
+                    "geometry: t+{}ms rect={},{},{}x{}",
+                    index * 8,
+                    current.0,
+                    current.1,
+                    current.2,
+                    current.3
+                ));
+                previous = current;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(8));
+        }
+    });
 }
 
 fn publish(window: &WebviewWindow, state: &BubbleState) -> BubbleSnapshot {
@@ -467,6 +506,15 @@ fn bubble_open_url(url: String) -> Result<(), String> {
         return Err(format!("cannot open the URL (ShellExecuteW returned {})", result.0 as isize));
     }
     Ok(())
+}
+
+/// Append one panel-side diagnostic line to the shell log.
+///
+/// The panel runs in a webview with no filesystem access, so the frames it hides and reveals cannot be
+/// correlated with the window geometry unless it can write here.
+#[tauri::command]
+fn bubble_panel_log(message: String) {
+    crate::log::line(&format!("panel: {message}"));
 }
 
 /// Record the panel build the webview reports at startup.
@@ -977,6 +1025,7 @@ fn main() {
             bubble_focus_main,
             bubble_flash_main,
             bubble_panel_ready,
+            bubble_panel_log,
         ])
         .setup(|app| {
             let handle = app.handle().clone();

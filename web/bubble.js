@@ -23,7 +23,7 @@
    * writes it to `~/.dsh/dsh-bubble/shell.log` at startup, which is the only reliable way to tell which
    * build a running ball actually loaded.
    */
-  const PANEL_REVISION = '2026-09-28.2-no-flash'
+  const PANEL_REVISION = '2026-09-28.5-lock-covers-classes'
 
   const tauri = window.__TAURI__
   const invoke = tauri?.core?.invoke
@@ -376,14 +376,30 @@
    * @param expanded - Target state to ask the shell for.
    * @returns The shell's geometry snapshot, or undefined when the shell did not answer.
    */
-  async function applyGeometry(expanded) {
+  /**
+   * Run a window-geometry change with the ball and panel hidden, revealing only at the very end.
+   *
+   * The ball's resting place is the window's top-left corner and the docked corner only follows the
+   * `body.expand-*` classes. Resizing the window and applying those classes are therefore two separate
+   * moments, and every frame between them shows the ball in the wrong corner: that is the flash users
+   * see on expand. The lock covers both, and `nextPaintedFrame` guarantees the hidden state is actually
+   * on screen before the window changes size — measured on the live shell, a lock that skipped that wait
+   * lived 10 ms against a 16.7 ms frame and the flash survived.
+   *
+   * @param work - Geometry change plus the state application that must stay hidden.
+   * @returns Whatever `work` returns.
+   */
+  async function withLayoutLock(work) {
     document.body.classList.add('layout-change')
-    // Force a style flush so the hiding frame exists before the window changes size.
+    // Force a style flush so the hiding style exists in this task.
     void document.body.offsetHeight
+    void shell('bubble_panel_log', { message: 'lock on' })
+    await nextPaintedFrame()
     try {
-      return await shell('bubble_set_expanded', { expanded })
+      return await work()
     } finally {
       document.body.classList.remove('layout-change')
+      void shell('bubble_panel_log', { message: 'lock off' })
     }
   }
 
@@ -397,12 +413,13 @@
       collapseFrame = undefined
     }
     if (next) {
-      const geometry = await applyGeometry(true)
-      applyWindowState(geometry)
-      panel.hidden = false
-      expanded = true
-      document.body.classList.add('expanded')
-      stop.hidden = !conversation.running
+      await withLayoutLock(async () => {
+        applyWindowState(await shell('bubble_set_expanded', { expanded: true }))
+        panel.hidden = false
+        expanded = true
+        document.body.classList.add('expanded')
+        stop.hidden = !conversation.running
+      })
       scrollToEnd()
       return
     }
@@ -414,7 +431,9 @@
     stop.hidden = true
     if (force) {
       panel.hidden = true
-      applyWindowState(await applyGeometry(false))
+      await withLayoutLock(async () => {
+        applyWindowState(await shell('bubble_set_expanded', { expanded: false }))
+      })
       return
     }
     collapseFrame = setTimeout(async () => {
@@ -422,7 +441,9 @@
       panel.hidden = true
       // The class flip above already ran the exit animation; the window shrink happens now, so the
       // ball keeps its docked corner until the geometry is final.
-      applyWindowState(await applyGeometry(false))
+      await withLayoutLock(async () => {
+        applyWindowState(await shell('bubble_set_expanded', { expanded: false }))
+      })
     }, ANIMATION_MS)
   }
 
@@ -670,6 +691,35 @@
     enhance(stream.bubble)
     stream.bubble.classList.toggle('cursor', conversation.running && stream.text === '')
     scrollToEnd()
+  }
+
+  /**
+   * Resolve once the current DOM state has been painted.
+   *
+   * A `requestAnimationFrame` callback runs *before* its frame is painted, and an `await` continuation
+   * after it is a microtask that also runs before that paint. A `setTimeout` task scheduled from inside
+   * the frame callback runs after the frame is painted, so the sequence here is "one frame, then a task":
+   * by the time it resolves, the hidden state is on screen. Two animation frames were tried first and
+   * measured insufficient for exactly that microtask reason.
+   *
+   * A safety timeout keeps this from blocking forever when the webview throttles frames (hidden or
+   * minimized), where nothing is being painted for the user to see anyway.
+   *
+   * @returns A promise that settles after the next painted frame, or after 120 ms.
+   */
+  function nextPaintedFrame() {
+    return new Promise((resolve) => {
+      let settled = false
+      const done = () => {
+        if (settled) return
+        settled = true
+        resolve()
+      }
+      nextPaint(() => {
+        setTimeout(done, 0)
+      })
+      setTimeout(done, 120)
+    })
   }
 
   /**
